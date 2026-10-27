@@ -21,6 +21,69 @@ void check_cleanup(cudaError_t error, const char* operation) noexcept {
     }
 }
 
+constexpr int max_impacts = 64;
+
+struct ImpactBatch {
+    Impact events[max_impacts];
+    int count;
+};
+
+__device__ double2 impact_weights(const Impact& event, double x, double z) {
+    const double px = x - event.x;
+    const double pz = z - event.z;
+    const double radius_squared = static_cast<double>(event.radius) * event.radius;
+    const double distance_squared = px * px + pz * pz;
+    if (distance_squared > radius_squared) return make_double2(0.0, 0.0);
+    const double scaled = distance_squared / radius_squared;
+    return make_double2(exp(-4.5 * scaled), exp(-1.125 * scaled));
+}
+
+__global__ void sum_impact_support(ImpactBatch batch, double2* sums,
+                                   int nx, int ny, double dx, double dz) {
+    const Impact event = batch.events[blockIdx.x];
+    const double radius = event.radius;
+    const int first_x = max(0, static_cast<int>(ceil((event.x - radius) / dx - 0.5)));
+    const int last_x = min(nx - 1, static_cast<int>(floor((event.x + radius) / dx - 0.5)));
+    const int first_z = max(0, static_cast<int>(ceil((event.z - radius) / dz - 0.5)));
+    const int last_z = min(ny - 1, static_cast<int>(floor((event.z + radius) / dz - 0.5)));
+    const int width = last_x - first_x + 1;
+    double2 total = make_double2(0.0, 0.0);
+    for (int i = threadIdx.x; i < width * (last_z - first_z + 1); i += blockDim.x) {
+        const int x = first_x + i % width;
+        const int z = first_z + i / width;
+        const double2 weights = impact_weights(event, (x + 0.5) * dx, (z + 0.5) * dz);
+        total.x += weights.x;
+        total.y += weights.y;
+    }
+    __shared__ double2 partial[256];
+    partial[threadIdx.x] = total;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
+        if (threadIdx.x < stride) {
+            partial[threadIdx.x].x += partial[threadIdx.x + stride].x;
+            partial[threadIdx.x].y += partial[threadIdx.x + stride].y;
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) sums[blockIdx.x] = partial[0];
+}
+
+__global__ void apply_impact_batch(float* eta, ImpactBatch batch, const double2* sums,
+                                   int nx, int ny, double dx, double dz) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= nx * ny) return;
+    const double x = (i % nx + 0.5) * dx;
+    const double z = (i / nx + 0.5) * dz;
+    float height = eta[i];
+    for (int e = 0; e < batch.count; ++e) {
+        const Impact event = batch.events[e];
+        const double2 weights = impact_weights(event, x, z);
+        height += static_cast<float>(event.strength *
+            (weights.x - weights.y * (sums[e].x / sums[e].y)));
+    }
+    eta[i] = height;
+}
+
 __global__ void update_velocity(const float* eta, float* u, float* v,
                                 int nx, int ny, float dx, float dz,
                                 float gravity_dt, float drag) {
@@ -59,6 +122,7 @@ Simulation::Simulation(const Config& config) : config_(config), max_dt_(stable_d
         check(cudaMalloc(&eta_, sizeof(float) * g.nx * g.ny), "allocate heights");
         check(cudaMalloc(&u_, sizeof(float) * (g.nx + 1) * g.ny), "allocate x velocities");
         check(cudaMalloc(&v_, sizeof(float) * g.nx * (g.ny + 1)), "allocate z velocities");
+        check(cudaMalloc(&impact_sums_, sizeof(double2) * max_impacts), "allocate impact sums");
         reset();
     } catch (...) {
         release();
@@ -68,10 +132,46 @@ Simulation::Simulation(const Config& config) : config_(config), max_dt_(stable_d
 
 Simulation::~Simulation() { release(); }
 
+void Simulation::apply_impacts(const Impact* host_events, std::size_t count) {
+    if (count > max_impacts) throw std::invalid_argument("at most 64 impacts may be submitted per call");
+    if (count == 0) return;
+    if (!host_events) throw std::invalid_argument("nonempty impact batch requires events");
+    const auto& g = config_.grid;
+    const double dx = static_cast<double>(g.lx) / g.nx;
+    const double dz = static_cast<double>(g.lz) / g.ny;
+    ImpactBatch batch{};
+    batch.count = static_cast<int>(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto& event = host_events[i];
+        if (!std::isfinite(event.x) || event.x < 0.0f || event.x > g.lx ||
+            !std::isfinite(event.z) || event.z < 0.0f || event.z > g.lz) {
+            throw std::invalid_argument("impact position must be finite and inside the basin");
+        }
+        if (!std::isfinite(event.radius) || event.radius <= 0.0f ||
+            event.radius < 2.0 * std::max(dx, dz) ||
+            event.radius > 0.25 * std::min(g.lx, g.lz)) {
+            throw std::invalid_argument("impact radius must span at least two cells and at most one quarter of the basin");
+        }
+        if (!std::isfinite(event.strength) || event.strength < 0.0f ||
+            event.strength > 0.02f * config_.depth) {
+            throw std::invalid_argument("impact strength must be finite and in [0, 0.02 * depth]");
+        }
+        batch.events[i] = event;
+    }
+    constexpr int threads = 256;
+    // Launch parameters snapshot the compact batch before the caller can reuse its events.
+    sum_impact_support<<<batch.count, threads, 0, stream_>>>(batch, impact_sums_, g.nx, g.ny, dx, dz);
+    check(cudaGetLastError(), "launch impact support reduction");
+    apply_impact_batch<<<(g.nx * g.ny + threads - 1) / threads, threads, 0, stream_>>>(
+        eta_, batch, impact_sums_, g.nx, g.ny, dx, dz);
+    check(cudaGetLastError(), "launch impact application");
+}
+
 void Simulation::release() noexcept {
     if (eta_) check_cleanup(cudaFree(eta_), "free heights");
     if (u_) check_cleanup(cudaFree(u_), "free x velocities");
     if (v_) check_cleanup(cudaFree(v_), "free z velocities");
+    if (impact_sums_) check_cleanup(cudaFree(impact_sums_), "free impact sums");
     if (stream_) check_cleanup(cudaStreamDestroy(stream_), "destroy simulation stream");
 }
 

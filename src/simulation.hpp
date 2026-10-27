@@ -2,10 +2,15 @@
 
 #include "config.hpp"
 #include <cuda_runtime_api.h>
+#include <cstddef>
 
 namespace water {
 
 struct Snapshot;
+
+struct Impact {
+    float x, z, radius, strength;
+};
 
 class Simulation {
 public:
@@ -16,6 +21,7 @@ public:
 
     void reset();
     void step(float dt, float damping);
+    void apply_impacts(const Impact* host_events, std::size_t count);
     cudaStream_t stream() const { return stream_; }
     const Config& config() const { return config_; }
 
@@ -30,6 +36,7 @@ private:
     float* eta_ = nullptr;
     float* u_ = nullptr;
     float* v_ = nullptr;
+    double2* impact_sums_ = nullptr;
 };
 
 } // namespace water
