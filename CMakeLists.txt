@@ -35,6 +35,13 @@ if(WATER_BUILD_DEMO)
     target_link_libraries(water_timeline PUBLIC water_core raylib)
     add_library(water_renderer src/water_renderer.cpp)
     target_link_libraries(water_renderer PUBLIC water_core raylib)
+    add_library(water_controller src/app_controller.cpp)
+    target_link_libraries(water_controller PUBLIC water_timeline)
+    add_executable(water_demo src/main.cpp)
+    target_link_libraries(water_demo PRIVATE water_controller water_renderer)
+    add_custom_command(TARGET water_demo POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:water_demo>/assets")
 endif()
 
 include(CTest)
@@ -44,9 +51,17 @@ if(BUILD_TESTING)
     add_executable(water_tests tests/test_main.cpp tests/config_tests.cpp tests/numerics_tests.cu tests/impact_tests.cu)
     target_link_libraries(water_tests PRIVATE water_validation)
     if(WATER_BUILD_DEMO)
-        target_sources(water_tests PRIVATE tests/timeline_tests.cpp)
-        target_link_libraries(water_tests PRIVATE water_timeline)
+        target_sources(water_tests PRIVATE tests/timeline_tests.cpp tests/controller_tests.cu)
+        target_link_libraries(water_tests PRIVATE water_controller)
         add_test(NAME timeline COMMAND water_tests timeline)
+        add_test(NAME controller COMMAND water_tests controller)
+        add_test(NAME demo_help COMMAND water_demo --help)
+        set_tests_properties(demo_help PROPERTIES PASS_REGULAR_EXPRESSION "--rain-rate")
+        add_test(NAME demo_smoke COMMAND ${CMAKE_COMMAND}
+            "-DDEMO=$<TARGET_FILE:water_demo>"
+            "-DSMOKE_DIR=${CMAKE_CURRENT_BINARY_DIR}/demo-smoke"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/demo_smoke.cmake")
+        set_tests_properties(demo_smoke PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
         add_executable(water_interop_tests tests/test_main.cpp tests/interop_tests.cpp)
         add_library(water_renderer_validation src/water_renderer.cpp)
         target_compile_definitions(water_renderer_validation PRIVATE WATER_INTEROP_VALIDATION)
