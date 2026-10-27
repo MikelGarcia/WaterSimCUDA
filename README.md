@@ -41,3 +41,5 @@ Remove-Item Env:WATER_VALIDATE_SECONDS, Env:WATER_VALIDATE_WARMUP, Env:WATER_VAL
 ```
 
 These runs retain the normal 60 FPS cap. See [validation results and remaining manual checks](docs/validation.md).
+
+`ctest --test-dir build -C Release -L soak --output-on-failure` runs 120 simulated seconds of maximum seeded rain on each rectangular test grid. It uses the production controller and CUDA solver without opening a window, checking finite state, mean height, amplitude and the final 30-second envelope. The soak requires `WATER_BUILD_DEMO=ON` for raylib's scheduler types; `WATER_BUILD_DEMO=OFF` retains the raylib-free configuration, numerical and impact groups.
