@@ -39,9 +39,18 @@ if(WATER_BUILD_DEMO)
     target_link_libraries(water_controller PUBLIC water_timeline)
     add_executable(water_demo src/main.cpp)
     target_link_libraries(water_demo PRIVATE water_controller water_renderer)
-    add_custom_command(TARGET water_demo POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${CMAKE_CURRENT_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:water_demo>/assets")
+    set(WATER_ASSET_DIR "${CMAKE_CURRENT_BINARY_DIR}/assets")
+    if(CMAKE_CONFIGURATION_TYPES)
+        set(WATER_ASSET_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/assets")
+    endif()
+    add_custom_target(water_assets
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${WATER_ASSET_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/water.vs"
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/water.fs"
+                "${WATER_ASSET_DIR}"
+        VERBATIM)
+    add_dependencies(water_demo water_assets)
 endif()
 
 include(CTest)
