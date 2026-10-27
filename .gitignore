@@ -1,0 +1,5 @@
+/build*/
+/.cuda-smoke-*/
+/.superpowers/
+/.worktrees/
+*.user
