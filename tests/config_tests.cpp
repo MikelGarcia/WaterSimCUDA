@@ -175,3 +175,11 @@ TEST_CASE("config", timestep_rejects_invalid_or_unrepresentable_substep_counts) 
     config.depth = std::numeric_limits<float>::max();
     CHECK_THROWS(water::substeps_per_quantum(config), std::invalid_argument);
 }
+
+TEST_CASE("config", float_timestep_stays_within_cfl_bound_at_subdivision_boundary) {
+    const auto config = parse({"--depth", "1.5178088"});
+    const int substeps = water::substeps_per_quantum(config);
+    const float dt = static_cast<float>((1.0 / 120.0) / substeps);
+    CHECK(dt > 0.0f);
+    CHECK(dt <= water::stable_dt(config));
+}

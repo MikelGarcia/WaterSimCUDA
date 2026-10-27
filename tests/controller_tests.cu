@@ -35,6 +35,20 @@ TEST_CASE("controller", stalled_frame_preserves_drop_and_limits_advancement) {
     CHECK(zero(water::download(simulation).eta));
 }
 
+TEST_CASE("controller", advances_valid_depth_at_float_timestep_rounding_boundary) {
+    water::Config config;
+    config.depth = 1.5178088f;
+    water::Simulation simulation(config);
+    const water::Impact impact{10, 6, config.impact_radius, config.impact_strength};
+    simulation.apply_impacts(&impact, 1);
+    water::AppController app(simulation, config);
+    app.frame(1.0 / 120.0, false, false, 0, config.impact_strength, config.damping);
+    CHECK_NEAR(app.sim_time(), 1.0 / 120.0, 1e-14);
+    const auto state = water::download(simulation);
+    CHECK(!zero(state.u));
+    CHECK(!zero(state.v));
+}
+
 TEST_CASE("controller", pause_freezes_time_drops_and_all_water_arrays) {
     const auto config = fixture();
     water::Simulation simulation(config);

@@ -101,11 +101,20 @@ double stable_dt(const Config& config) {
 }
 
 int substeps_per_quantum(const Config& config) {
-    const double substeps = std::ceil((1.0 / 120.0) / stable_dt(config));
-    if (substeps > std::numeric_limits<int>::max()) {
+    const double max_dt = stable_dt(config);
+    const double required = std::ceil((1.0 / 120.0) / max_dt);
+    if (required > std::numeric_limits<int>::max()) {
         throw std::invalid_argument("configuration requires too many substeps per quantum");
     }
-    return std::max(1, static_cast<int>(substeps));
+    int substeps = std::max(1, static_cast<int>(required));
+    // The controller's float timestep can round above the double CFL bound.
+    while (static_cast<float>((1.0 / 120.0) / substeps) > max_dt) {
+        if (substeps == std::numeric_limits<int>::max()) {
+            throw std::invalid_argument("configuration requires too many substeps per quantum");
+        }
+        ++substeps;
+    }
+    return substeps;
 }
 
 } // namespace water
