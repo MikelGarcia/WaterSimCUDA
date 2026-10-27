@@ -12,6 +12,10 @@ struct Impact {
     float x, z, radius, strength;
 };
 
+struct Vertex {
+    float x, y, z;
+};
+
 class Simulation {
 public:
     explicit Simulation(const Config& config);
@@ -22,6 +26,7 @@ public:
     void reset();
     void step(float dt, float damping);
     void apply_impacts(const Impact* host_events, std::size_t count);
+    void write_surface(Vertex* device_positions, Vertex* device_normals, std::size_t vertex_count);
     cudaStream_t stream() const { return stream_; }
     const Config& config() const { return config_; }
 

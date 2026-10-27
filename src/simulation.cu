@@ -113,6 +113,45 @@ __global__ void update_height(float* eta, const float* u, const float* v,
     eta[i] -= depth_dt * divergence;
 }
 
+__device__ float node_height(const float* eta, int x, int z, int nx, int ny) {
+    float height = 0.0f;
+    int count = 0;
+    for (int row = max(0, z - 1); row <= min(ny - 1, z); ++row) {
+        for (int column = max(0, x - 1); column <= min(nx - 1, x); ++column) {
+            height += eta[row * nx + column];
+            ++count;
+        }
+    }
+    return height / count;
+}
+
+__global__ void build_surface(const float* eta, Vertex* positions, Vertex* normals,
+                              int nx, int ny, float lx, float lz) {
+    const int cell = blockIdx.x * blockDim.x + threadIdx.x;
+    if (cell >= nx * ny) return;
+    const int x = cell % nx, z = cell / nx;
+    const float dx = lx / nx, dz = lz / ny;
+    Vertex corners[4], corner_normals[4];
+    for (int corner = 0; corner < 4; ++corner) {
+        const int node_x = x + corner % 2, node_z = z + corner / 2;
+        const int left = max(0, node_x - 1), right = min(nx, node_x + 1);
+        const int near = max(0, node_z - 1), far = min(ny, node_z + 1);
+        const float sx = (node_height(eta, right, node_z, nx, ny) -
+                          node_height(eta, left, node_z, nx, ny)) / ((right - left) * dx);
+        const float sz = (node_height(eta, node_x, far, nx, ny) -
+                          node_height(eta, node_x, near, nx, ny)) / ((far - near) * dz);
+        const float inverse_length = rsqrtf(sx * sx + 1.0f + sz * sz);
+        corners[corner] = {node_x * dx - lx / 2, node_height(eta, node_x, node_z, nx, ny),
+                           node_z * dz - lz / 2};
+        corner_normals[corner] = {-sx * inverse_length, inverse_length, -sz * inverse_length};
+    }
+    const int order[6] = {0, 2, 1, 1, 2, 3};
+    for (int vertex = 0; vertex < 6; ++vertex) {
+        positions[cell * 6 + vertex] = corners[order[vertex]];
+        normals[cell * 6 + vertex] = corner_normals[order[vertex]];
+    }
+}
+
 } // namespace
 
 Simulation::Simulation(const Config& config) : config_(config), max_dt_(stable_dt(config)) {
@@ -131,6 +170,19 @@ Simulation::Simulation(const Config& config) : config_(config), max_dt_(stable_d
 }
 
 Simulation::~Simulation() { release(); }
+
+void Simulation::write_surface(Vertex* device_positions, Vertex* device_normals,
+                               std::size_t vertex_count) {
+    const auto& g = config_.grid;
+    if (!device_positions || !device_normals ||
+        vertex_count != std::size_t{6} * g.nx * g.ny) {
+        throw std::invalid_argument("surface requires two device buffers with exactly 6*nx*ny vertices");
+    }
+    constexpr int threads = 128;
+    build_surface<<<(g.nx * g.ny + threads - 1) / threads, threads, 0, stream_>>>(
+        eta_, device_positions, device_normals, g.nx, g.ny, g.lx, g.lz);
+    check(cudaGetLastError(), "launch surface generation");
+}
 
 void Simulation::apply_impacts(const Impact* host_events, std::size_t count) {
     if (count > max_impacts) throw std::invalid_argument("at most 64 impacts may be submitted per call");
