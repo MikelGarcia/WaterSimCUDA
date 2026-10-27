@@ -6,6 +6,8 @@
 #include <rlgl.h>
 #include <array>
 #include <iostream>
+#include <fstream>
+#include <filesystem>
 
 namespace {
 
@@ -100,7 +102,334 @@ void check_target(RenderTexture2D target, int width, int height) {
     CHECK(glGetError() == GL_NO_ERROR);
 }
 
+struct SkyProbe {
+    Shader shader{};
+    SkyProbe() {
+        auto source = water::SceneValidation::fragment_source("sky.fs");
+        source.insert(source.find('\n') + 1, "#define main backgroundMain\n");
+        source += "\n#undef main\nuniform vec3 probeDirection; uniform int visibilityOnly;\n"
+                  "void main() { finalColor = vec4(visibilityOnly == 1 ? vec3(sunVisibility(simTime)) : "
+                  "skyRadiance(probeDirection, simTime), 1); }\n";
+        shader = LoadShaderFromMemory(nullptr, source.c_str());
+        CHECK(shader.id && shader.id != rlGetShaderIdDefault());
+    }
+    ~SkyProbe() { UnloadShader(shader); }
+    Sample read(Vector3 direction, float time, bool visibility = false) {
+        const int mode = visibility ? 1 : 0;
+        SetShaderValue(shader, GetShaderLocation(shader, "probeDirection"), &direction, SHADER_UNIFORM_VEC3);
+        SetShaderValue(shader, GetShaderLocation(shader, "simTime"), &time, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(shader, GetShaderLocation(shader, "visibilityOnly"), &mode, SHADER_UNIFORM_INT);
+        BeginShaderMode(shader);
+        DrawRectangle(0, 0, 840, 560, WHITE);
+        EndShaderMode();
+        rlDrawRenderBatchActive();
+        return sample({}, 420, 280);
+    }
+};
+
+struct WaterProbe {
+    Shader shader{};
+    explicit WaterProbe(const water::SceneRenderer& scene, const Camera3D& view) {
+        const char* vertex = "#version 330\nin vec3 vertexPosition; uniform mat4 mvp;"
+            "uniform vec3 probePosition; uniform vec3 probeNormal; out vec3 worldPosition; out vec3 normal;"
+            "void main(){ worldPosition=probePosition; normal=probeNormal; gl_Position=mvp*vec4(vertexPosition,1); }";
+        const auto source = water::SceneValidation::fragment_source("water.fs");
+        shader = LoadShaderFromMemory(vertex, source.c_str());
+        CHECK(shader.id && shader.id != rlGetShaderIdDefault());
+        SetShaderValueMatrix(shader, GetShaderLocation(shader, "captureView"), water::SceneValidation::capture_view(scene));
+        SetShaderValueMatrix(shader, GetShaderLocation(shader, "captureProjection"), water::SceneValidation::capture_projection(scene));
+        SetShaderValue(shader, GetShaderLocation(shader, "eyePosition"), &view.position, SHADER_UNIFORM_VEC3);
+        const Vector2 size{840, 560}, planes{float(rlGetCullDistanceNear()), float(rlGetCullDistanceFar())};
+        SetShaderValue(shader, GetShaderLocation(shader, "drawableSize"), &size, SHADER_UNIFORM_VEC2);
+        SetShaderValue(shader, GetShaderLocation(shader, "clipPlanes"), &planes, SHADER_UNIFORM_VEC2);
+        const float zero = 0;
+        SetShaderValue(shader, GetShaderLocation(shader, "simTime"), &zero, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(shader, GetShaderLocation(shader, "reflectionWeight"), &zero, SHADER_UNIFORM_FLOAT);
+        const int color = 1, depth = 2;
+        SetShaderValue(shader, GetShaderLocation(shader, "captureColor"), &color, SHADER_UNIFORM_INT);
+        SetShaderValue(shader, GetShaderLocation(shader, "captureDepth"), &depth, SHADER_UNIFORM_INT);
+    }
+    ~WaterProbe() { UnloadShader(shader); }
+    Sample read(RenderTexture2D target, Vector3 point, Vector3 normal) {
+        SetShaderValue(shader, GetShaderLocation(shader, "probePosition"), &point, SHADER_UNIFORM_VEC3);
+        SetShaderValue(shader, GetShaderLocation(shader, "probeNormal"), &normal, SHADER_UNIFORM_VEC3);
+        rlActiveTextureSlot(1); rlEnableTexture(target.texture.id);
+        rlActiveTextureSlot(2); rlEnableTexture(target.depth.id);
+        rlActiveTextureSlot(0);
+        BeginShaderMode(shader);
+        DrawRectangle(0, 0, 840, 560, WHITE);
+        EndShaderMode();
+        rlDrawRenderBatchActive();
+        rlActiveTextureSlot(2); rlDisableTexture();
+        rlActiveTextureSlot(1); rlDisableTexture();
+        rlActiveTextureSlot(0);
+        return sample({}, 420, 280);
+    }
+};
+
+struct AssetOverride {
+    std::filesystem::path path;
+    std::string original;
+    AssetOverride(const char* name, const std::string& replacement)
+        : path(std::filesystem::path(GetApplicationDirectory()) / "assets" / name) {
+        std::ifstream input(path, std::ios::binary);
+        original = {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+        CHECK(input.is_open());
+        input.close();
+        std::ofstream(path, std::ios::binary) << replacement;
+    }
+    ~AssetOverride() { std::ofstream(path, std::ios::binary) << original; }
+};
+
 } // namespace
+
+TEST_CASE("appearance", mix_endpoints_are_exact_color_weights) {
+    Context context;
+    auto config = small_config();
+    water::Simulation simulation(config);
+    water::WaterRenderer water(config.grid);
+    water.update(simulation);
+    water::SceneRenderer scene(config);
+    CHECK(scene.resize(840, 560));
+    std::array<std::vector<unsigned char>, 3> images;
+    for (int i = 0; i < 3; ++i) {
+        BeginDrawing();
+        scene.draw(camera, water, {}, 12, i * 0.5f);
+        rlDrawRenderBatchActive();
+        images[i].resize(80 * 40 * 4);
+        glReadPixels(380, 260, 80, 40, GL_RGBA, GL_UNSIGNED_BYTE, images[i].data());
+        EndDrawing();
+    }
+    int difference = 0;
+    for (std::size_t pixel = 0; pixel < images[0].size(); pixel += 4) {
+        for (int c = 0; c < 3; ++c) {
+            CHECK_NEAR(float(images[1][pixel + c]),
+                       0.5f * (images[0][pixel + c] + images[2][pixel + c]), 2.0f);
+            difference += std::abs(int(images[0][pixel + c]) - int(images[2][pixel + c]));
+        }
+        CHECK(images[1][pixel + 3] == 255);
+    }
+    CHECK(difference > 80 * 40 * 20);
+    CHECK(glGetError() == GL_NO_ERROR);
+}
+
+TEST_CASE("appearance", normal_driven_refraction_moves_stone) {
+    Context context;
+    auto config = small_config();
+    config.grid.nx = 128; config.grid.ny = 192;
+    config.impact_radius = 0.4f;
+    water::Simulation simulation(config);
+    water::WaterRenderer water(config.grid);
+    water::SceneRenderer scene(config);
+    CHECK(scene.resize(840, 560));
+    const Camera3D overhead{{0, 8, 0}, {0, 0, 0}, {0, 0, -1}, 45, CAMERA_PERSPECTIVE};
+    std::array<std::vector<unsigned char>, 2> images;
+    for (int i = 0; i < 2; ++i) {
+        if (i) {
+            const water::Impact impact{2, 3, 0.4f, 0.02f};
+            simulation.apply_impacts(&impact, 1);
+        }
+        water.update(simulation);
+        BeginDrawing();
+        scene.draw(overhead, water, {}, 12, 0);
+        images[i].resize(160 * 160 * 4);
+        glReadPixels(340, 200, 160, 160, GL_RGBA, GL_UNSIGNED_BYTE, images[i].data());
+        if (!i) {
+            const auto stone = sample_world(water::SceneValidation::target(scene), {0, -1, 0}, overhead);
+            RenderTexture2D screen{}; screen.texture = {0, 840, 560, 1, 0};
+            const auto transmitted = sample_world(screen, {0, 0, 0}, overhead);
+            CHECK(std::abs(int(transmitted.color[0]) - int(stone.color[0])) < 45);
+            CHECK(std::abs(int(transmitted.color[2]) - int(stone.color[2])) < 45);
+        }
+        EndDrawing();
+    }
+    int changed = 0, unchanged = 0;
+    for (int y = 0; y < 160; ++y) for (int x = 0; x < 160; ++x) {
+        int difference = 0;
+        for (int c = 0; c < 3; ++c)
+            difference += std::abs(int(images[0][(y * 160 + x) * 4 + c]) - int(images[1][(y * 160 + x) * 4 + c]));
+        if (x > 45 && x < 115 && y > 45 && y < 115 && difference > 2) ++changed;
+        if ((x < 20 || x > 140) && difference <= 2) ++unchanged;
+    }
+    CHECK(changed > 40);
+    CHECK(unchanged > 5000);
+    CHECK(glGetError() == GL_NO_ERROR);
+}
+
+TEST_CASE("appearance", sky_direction_time_and_pause_are_shared) {
+    Context context;
+    const auto config = small_config();
+    water::Simulation simulation(config);
+    water::WaterRenderer water(config.grid);
+    water.update(simulation);
+    water::SceneRenderer scene(config);
+    CHECK(scene.resize(840, 560));
+    const Camera3D sky_camera{{0, 8, 0}, {0, 9, -1}, {0, 1, 0}, 60, CAMERA_PERSPECTIVE};
+    std::array<std::vector<unsigned char>, 4> images;
+    for (int i = 0; i < 4; ++i) {
+        BeginDrawing();
+        scene.draw(sky_camera, water, {}, i == 2 ? 90 : 0, 1);
+        images[i].resize(840 * 560 * 4);
+        glReadPixels(0, 0, 840, 560, GL_RGBA, GL_UNSIGNED_BYTE, images[i].data());
+        EndDrawing();
+    }
+    CHECK(images[0] == images[1]);
+    CHECK(images[0] == images[3]);
+    int changed = 0;
+    for (std::size_t i = 0; i < images[0].size(); i += 4)
+        if (std::abs(int(images[0][i]) - int(images[2][i])) > 8) ++changed;
+    CHECK(changed > 10000);
+
+    SkyProbe probe;
+    for (const float time : {0.0f, 90.0f}) {
+        BeginDrawing();
+        scene.draw(sky_camera, water, {}, time, 1);
+        const auto background = sample({}, 420, 280);
+        const Ray ray = GetScreenToWorldRay({420.5f, 279.5f}, sky_camera);
+        const auto expected = probe.read(ray.direction, time);
+        for (int c = 0; c < 3; ++c) CHECK_NEAR(int(background.color[c]), int(expected.color[c]), 2);
+        auto moved = sky_camera;
+        moved.position.x += 50; moved.target.x += 50;
+        scene.draw(moved, water, {}, time, 1);
+        const auto paused = sample({}, 420, 280);
+        for (int c = 0; c < 3; ++c) CHECK_NEAR(int(paused.color[c]), int(expected.color[c]), 2);
+        const Camera3D reflected{{-8, 4, 0}, {0, 0, 0}, {0, 1, 0}, 45, CAMERA_PERSPECTIVE};
+        scene.draw(reflected, water, {}, time, 1);
+        const auto reflection = sample({}, 420, 280);
+        const Ray incident = GetScreenToWorldRay({420.5f, 279.5f}, reflected);
+        const auto sky = probe.read({incident.direction.x, -incident.direction.y, incident.direction.z}, time);
+        for (int c = 0; c < 3; ++c) CHECK_NEAR(int(reflection.color[c]), int(sky.color[c]), 2);
+        EndDrawing();
+    }
+    std::array<Sample, 2> sunlight;
+    int sun_index = 0;
+    for (const float time : {389.0f, 0.0f}) {
+        BeginDrawing();
+        const auto visibility = probe.read({0, 1, 0}, time, true);
+        CHECK(time > 0 ? visibility.color[0] < 25 : visibility.color[0] > 230);
+        const Camera3D sun_camera{{0, 8, 0}, {-0.35f, 8.85f, -0.4f}, {0, 1, 0}, 45, CAMERA_PERSPECTIVE};
+        scene.draw(sun_camera, water, {}, time, 1);
+        sunlight[sun_index++] = sample({}, 420, 280);
+        const auto sun_ray = GetScreenToWorldRay({420.5f, 279.5f}, sun_camera);
+        const auto expected = probe.read(sun_ray.direction, time);
+        for (int c = 0; c < 3; ++c) CHECK_NEAR(int(sunlight[sun_index-1].color[c]), int(expected.color[c]), 2);
+        const Camera3D reflected{{2.8f, 6.8f, 3.2f}, {0, 0, 0}, {0, 1, 0}, 45, CAMERA_PERSPECTIVE};
+        scene.draw(reflected, water, {}, time, 1);
+        const auto highlight = sample({}, 420, 280);
+        const auto incident = GetScreenToWorldRay({420.5f, 279.5f}, reflected);
+        const auto sky = probe.read({incident.direction.x, -incident.direction.y, incident.direction.z}, time);
+        const int added_blue = int(highlight.color[2]) - sky.color[2];
+        CHECK(time > 0 ? added_blue >= 0 && added_blue < 8 : added_blue > 35);
+        EndDrawing();
+    }
+    CHECK(sunlight[1].color[0] > sunlight[0].color[0] + 90);
+    CHECK(glGetError() == GL_NO_ERROR);
+}
+
+TEST_CASE("appearance", refraction_rejects_rim_clear_and_screen_edges) {
+    Context context;
+    water::SceneRenderer scene(small_config());
+    CHECK(scene.resize(840, 560));
+    BeginDrawing();
+    for (const Camera3D view : {camera,
+            Camera3D{{0, 0.7f, 7}, {0, -0.2f, 0}, {0, 1, 0}, 45, CAMERA_PERSPECTIVE},
+            Camera3D{{0, 3, 1}, {0, 0, 0}, {0, 1, 0}, 45, CAMERA_PERSPECTIVE}}) {
+        water::SceneValidation::capture(scene, view);
+        const auto target = water::SceneValidation::target(scene);
+        WaterProbe probe(scene, view);
+        for (const Vector3 point : {Vector3{0, 0.12f, 3.09f}, Vector3{100, 0, 0}}) {
+            const auto fallback = probe.read(target, point, {0.8f, 0.6f, 0});
+            CHECK_NEAR(int(fallback.color[0]), 67, 2);
+            CHECK_NEAR(int(fallback.color[1]), 83, 2);
+            CHECK_NEAR(int(fallback.color[2]), 90, 2);
+            CHECK(fallback.color[3] == 255);
+        }
+    }
+    // A narrow invalid texel on the ray segment must reject an otherwise valid destination.
+    const Camera3D overhead{{0, 8, 0}, {0, 0, 0}, {0, 0, -1}, 45, CAMERA_PERSPECTIVE};
+    water::SceneValidation::capture(scene, overhead);
+    const auto target = water::SceneValidation::target(scene);
+    WaterProbe probe(scene, overhead);
+    std::vector<unsigned char> colors(840 * 560 * 4, 255);
+    std::vector<float> depths(840 * 560, expected_depth({0, -1, 0}, overhead));
+    const auto upload = [&] {
+        glBindTexture(GL_TEXTURE_2D, target.texture.id);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 840, 560, GL_RGBA, GL_UNSIGNED_BYTE, colors.data());
+        glBindTexture(GL_TEXTURE_2D, target.depth.id);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 840, 560, GL_DEPTH_COMPONENT, GL_FLOAT, depths.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+    };
+    // At this camera a tilted normal reaches the +0.02 UV cap: base x=420, destination x=436.
+    for (int y = 0; y < 560; ++y) for (int x = 0; x < 840; ++x) {
+        const int p = (y*840+x)*4;
+        colors[p] = x >= 435 ? 255 : 100;
+        colors[p+1] = x >= 435 ? 0 : 110;
+        colors[p+2] = x >= 435 ? 255 : 120;
+    }
+    upload();
+    const auto edge_ray = GetScreenToWorldRay({0.5f, 279.5f}, overhead);
+    const float distance = -overhead.position.y / edge_ray.direction.y;
+    const auto edge = probe.read(target,
+        {edge_ray.direction.x * distance, 0, edge_ray.direction.z * distance}, {0, 1, 0});
+    CHECK_NEAR(int(edge.color[0]), 67, 2);
+    CHECK_NEAR(int(edge.color[1]), 83, 2);
+    CHECK_NEAR(int(edge.color[2]), 90, 2);
+    const Vector3 tilt{0.8f, 0.6f, 0};
+    const auto accepted = probe.read(target, {0, 0, 0}, tilt);
+    const auto undistorted = probe.read(target, {0, 0, 0}, {0, 1, 0});
+    CHECK(accepted.color[0] > undistorted.color[0] + 70);
+    const float fault_depths[] = {expected_depth({0, -1, 0}, overhead), 1,
+                                 expected_depth({0, 0.1f, 0}, overhead), expected_depth({0, -3, 0}, overhead)};
+    for (int fault = 0; fault < 4; ++fault) {
+        for (int y = 0; y < 560; ++y) {
+            const int pixel = y*840 + 428;
+            colors[pixel*4+3] = fault == 0 ? 0 : 255;
+            depths[pixel] = fault_depths[fault];
+        }
+        upload();
+        const auto rejected = probe.read(target, {0, 0, 0}, tilt);
+        for (int c = 0; c < 3; ++c) CHECK_NEAR(int(rejected.color[c]), int(undistorted.color[c]), 2);
+    }
+    for (int y = 0; y < 560; ++y) for (int x = 0; x < 840; ++x) {
+        const int pixel = y*840 + x;
+        const bool displaced_band = x >= 421 && x <= 423;
+        colors[pixel*4] = displaced_band ? 255 : 100;
+        colors[pixel*4+1] = displaced_band ? 0 : 110;
+        colors[pixel*4+2] = displaced_band ? 255 : 120;
+        colors[pixel*4+3] = 255;
+        depths[pixel] = expected_depth({0, -1, 0}, overhead);
+    }
+    upload();
+    const auto small_wave = probe.read(target, {0, 0, 0}, {0.02f, 0.9998f, 0});
+    CHECK(small_wave.color[0] > undistorted.color[0] + 70);
+    EndDrawing();
+    CHECK(glGetError() == GL_NO_ERROR);
+}
+
+TEST_CASE("appearance", shader_loader_rejects_missing_marker_compile_and_uniform_failures) {
+    Context context;
+    CHECK_THROWS(water::SceneValidation::fragment_source("missing.fs"), std::runtime_error);
+    const std::array<std::pair<std::string, std::string>, 4> failures{{
+        {"void main() {}", "#version"},
+        {"#version 330\nout vec4 finalColor; void main() { finalColor=vec4(1); }", "SHARED_SKY"},
+        {"#version 330\n// SHARED_SKY\n invalid GLSL code", "compile"},
+        {"#version 330\n// SHARED_SKY\nout vec4 finalColor; void main() { finalColor=vec4(1); }", "eyePosition"}
+    }};
+    for (const auto& failure : failures) {
+        AssetOverride asset("water.fs", failure.first);
+        bool rejected = false;
+        try { water::SceneRenderer scene(small_config()); }
+        catch (const std::runtime_error& error) {
+            rejected = true;
+            CHECK(std::string(error.what()).find(failure.second) != std::string::npos);
+        }
+        CHECK(rejected);
+        CHECK(glIsProgram(rlGetShaderIdDefault()));
+    }
+    water::SceneRenderer recovered(small_config());
+    CHECK(recovered.resize(840, 560));
+    CHECK(glGetError() == GL_NO_ERROR);
+}
 
 TEST_CASE("appearance", capture_contains_only_submerged_stone) {
     Context context;
@@ -267,12 +596,15 @@ TEST_CASE("appearance", capture_and_main_projection_align_at_drawable_sizes) {
         screen.texture.height = GetRenderHeight();
         const auto water_pixel = sample_world(screen, {0, 0, 0});
         CHECK_NEAR(water_pixel.depth, expected_depth({0, 0, 0}), 0.00002f);
-        CHECK(water_pixel.color[2] > water_pixel.color[0] + 20);
+        CHECK(water_pixel.color[3] == 255);
         const auto stone_pixel = sample_world(screen, {0, 0.12f, 3.09f});
         CHECK(stone_pixel.color[0] > 35);
         CHECK(std::abs(int(stone_pixel.color[0]) - int(stone_pixel.color[2])) < 20);
         const auto background = sample(screen, 5, GetRenderHeight() - 6);
-        CHECK(background.color[0] == 225 && background.color[1] == 231 && background.color[2] == 234);
+        const auto ray = GetScreenToWorldRay({5.5f, 5.5f}, camera);
+        SkyProbe probe;
+        const auto expected_sky = probe.read(ray.direction, 0);
+        for (int c = 0; c < 3; ++c) CHECK_NEAR(int(background.color[c]), int(expected_sky.color[c]), 2);
         DrawRectangle(0, 0, 20, 20, MAGENTA);
         rlDrawRenderBatchActive();
         unsigned char ui[4]{};

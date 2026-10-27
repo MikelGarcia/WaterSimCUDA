@@ -2,6 +2,7 @@
 
 #include "config.hpp"
 #include <raylib.h>
+#include <string>
 #include <vector>
 
 namespace water {
@@ -25,6 +26,8 @@ private:
     friend struct SceneValidation;
 #endif
     void capture(const Camera3D& camera);
+    static std::string fragment_source(const char* fragment);
+    static Shader load_shader(const char* vertex, const char* fragment);
     void draw_basin(bool submerged);
     void release() noexcept;
 
@@ -32,6 +35,13 @@ private:
     Mesh basin_{};
     Shader stone_shader_{};
     Shader water_shader_{};
+    Shader sky_shader_{};
+    struct {
+        int eye, view, projection, color, depth, size, planes, time, reflection;
+    } water_locations_{};
+    struct {
+        int forward, right, up, size, aspect, fov, time;
+    } sky_locations_{};
     RenderTexture2D capture_{};
     Matrix capture_view_{}, capture_projection_{};
     Matrix view_{}, projection_{};

@@ -40,7 +40,7 @@ if(WATER_BUILD_DEMO)
     add_library(water_controller src/app_controller.cpp)
     target_link_libraries(water_controller PUBLIC water_timeline)
     add_executable(water_demo src/main.cpp)
-    target_link_libraries(water_demo PRIVATE water_controller water_renderer)
+    target_link_libraries(water_demo PRIVATE water_controller water_scene_renderer)
     set(WATER_ASSET_DIR "${CMAKE_CURRENT_BINARY_DIR}/assets")
     if(CMAKE_CONFIGURATION_TYPES)
         set(WATER_ASSET_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/assets")
@@ -52,6 +52,8 @@ if(WATER_BUILD_DEMO)
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/water.fs"
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/basin.vs"
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/basin.fs"
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/sky.fs"
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/sky.glsl"
                 "${WATER_ASSET_DIR}"
         VERBATIM)
     add_dependencies(water_demo water_assets)

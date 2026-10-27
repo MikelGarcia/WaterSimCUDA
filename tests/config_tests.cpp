@@ -15,6 +15,26 @@ water::Config parse(std::initializer_list<const char*> arguments) {
 
 } // namespace
 
+TEST_CASE("config", reflection_option_accepts_endpoints_and_rejects_invalid_values) {
+    CHECK_NEAR(parse({}).reflection, 0.5f, 1e-6f);
+    for (const char* value : {"0", "0.5", "1"}) {
+        CHECK_NEAR(parse({"--reflection", value}).reflection, std::stof(value), 1e-6f);
+    }
+    CHECK_THROWS(parse({"--reflection"}), std::invalid_argument);
+    for (const char* value : {"-0.01", "1.01", "nan", "inf", "", "abc", "0.5x"}) {
+        CHECK_THROWS(parse({"--reflection", value}), std::invalid_argument);
+    }
+}
+
+TEST_CASE("config", reflection_adjustment_uses_bounded_five_percent_steps) {
+    CHECK_NEAR(water::adjust_reflection(0, 1), 0.05f, 1e-6f);
+    CHECK_NEAR(water::adjust_reflection(1, -1), 0.95f, 1e-6f);
+    CHECK(water::adjust_reflection(0, -1) == 0);
+    CHECK(water::adjust_reflection(1, 1) == 1);
+    CHECK(water::adjust_reflection(0.5f, 100) == 1);
+    CHECK(water::adjust_reflection(0.5f, -100) == 0);
+}
+
 TEST_CASE("config", defaults_are_valid) {
     const auto config = parse({});
     water::validate(config);
@@ -116,7 +136,8 @@ TEST_CASE("config", rejects_nonfinite_values_in_every_float_field) {
         }
         for (float water::Config::* field : {&water::Config::depth, &water::Config::gravity,
                                             &water::Config::damping, &water::Config::impact_radius,
-                                            &water::Config::impact_strength, &water::Config::rain_rate}) {
+                                            &water::Config::impact_strength, &water::Config::rain_rate,
+                                            &water::Config::reflection}) {
             water::Config config;
             config.*field = value;
             CHECK_THROWS(water::validate(config), std::invalid_argument);

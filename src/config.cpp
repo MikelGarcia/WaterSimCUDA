@@ -30,7 +30,8 @@ Config parse_config(int argc, const char* const* argv) {
         const std::string_view flag(argv[i]);
         if (flag != "--nx" && flag != "--ny" && flag != "--lx" && flag != "--lz" &&
             flag != "--depth" && flag != "--damping" && flag != "--radius" &&
-            flag != "--strength" && flag != "--rain-rate" && flag != "--seed") {
+            flag != "--strength" && flag != "--rain-rate" && flag != "--seed" &&
+            flag != "--reflection") {
             throw std::invalid_argument("unknown option: " + std::string(flag));
         }
         if (++i == argc) {
@@ -47,6 +48,7 @@ Config parse_config(int argc, const char* const* argv) {
         else if (flag == "--strength") config.impact_strength = parse_number<float>(value, flag);
         else if (flag == "--rain-rate") config.rain_rate = parse_number<float>(value, flag);
         else if (flag == "--seed") config.seed = parse_number<unsigned>(value, flag);
+        else if (flag == "--reflection") config.reflection = parse_number<float>(value, flag);
     }
     validate(config);
     return config;
@@ -54,6 +56,9 @@ Config parse_config(int argc, const char* const* argv) {
 
 void validate(const Config& config) {
     const auto& grid = config.grid;
+    if (!std::isfinite(config.reflection) || config.reflection < 0 || config.reflection > 1) {
+        throw std::invalid_argument("--reflection must be finite and in [0, 1]");
+    }
     if (grid.nx < 8 || grid.nx > 2048) {
         throw std::invalid_argument("--nx must be in [8, 2048]");
     }
@@ -90,6 +95,10 @@ void validate(const Config& config) {
         throw std::invalid_argument("--radius must be finite, positive, at least two cell widths, "
                                     "and at most one quarter of the shorter basin dimension");
     }
+}
+
+float adjust_reflection(float current, int steps) {
+    return static_cast<float>(std::clamp(static_cast<double>(current) + steps * 0.05, 0.0, 1.0));
 }
 
 double stable_dt(const Config& config) {

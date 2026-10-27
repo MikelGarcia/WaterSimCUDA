@@ -17,6 +17,7 @@ struct AppearanceHandles {
 extern AppearanceHandles appearance_handles;
 
 struct SceneValidation {
+    static std::string fragment_source(const char* fragment) { return SceneRenderer::fragment_source(fragment); }
     static RenderTexture2D target(const SceneRenderer& scene) { return scene.capture_; }
     static void capture(SceneRenderer& scene, const Camera3D& camera) { scene.capture(camera); }
     static Matrix capture_projection(const SceneRenderer& scene) { return scene.capture_projection_; }

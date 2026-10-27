@@ -17,6 +17,7 @@ struct Config {
     float impact_radius = 0.35f;
     float impact_strength = 0.01f;
     float rain_rate = 8.0f;
+    float reflection = 0.5f;
     unsigned seed = 1;
 };
 
@@ -24,5 +25,6 @@ Config parse_config(int argc, const char* const* argv);
 void validate(const Config& config);
 double stable_dt(const Config& config);
 int substeps_per_quantum(const Config& config);
+float adjust_reflection(float current, int steps);
 
 } // namespace water

@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 
@@ -32,17 +34,28 @@ namespace {
 
 constexpr Matrix identity{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 
-Shader load_shader(const char* vertex, const char* fragment) {
+std::string read_asset(const char* name) {
     const auto assets = std::filesystem::path(GetApplicationDirectory()) / "assets";
-    const auto vs = (assets / vertex).string(), fs = (assets / fragment).string();
-    if (!FileExists(vs.c_str()) || !FileExists(fs.c_str()))
-        throw std::runtime_error("scene shader assets are missing: " + fs);
-    Shader shader = LoadShader(vs.c_str(), fs.c_str());
-    if (!shader.id || shader.id == rlGetShaderIdDefault()) {
-        UnloadShader(shader);
-        throw std::runtime_error("could not load scene shader: " + fs);
-    }
-    return shader;
+    const auto path = assets / name;
+    std::ifstream file(path);
+    if (!file) throw std::runtime_error("could not read scene shader: " + path.string());
+    return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+}
+
+int required_uniform(Shader shader, const char* name, const char* fragment) {
+    const int location = GetShaderLocation(shader, name);
+    if (location < 0)
+        throw std::runtime_error(std::string(fragment) + ": missing required uniform " + name);
+    return location;
+}
+
+Vector3 normalized(Vector3 v) {
+    const float length = std::sqrt(v.x*v.x + v.y*v.y + v.z*v.z);
+    return {v.x/length, v.y/length, v.z/length};
+}
+
+Vector3 cross(Vector3 a, Vector3 b) {
+    return {a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x};
 }
 
 void unload_target(RenderTexture2D target) {
@@ -63,6 +76,31 @@ void begin_3d(const Camera3D& camera) {
 
 } // namespace
 
+std::string SceneRenderer::fragment_source(const char* fragment) {
+    auto source = read_asset(fragment);
+    if (source.rfind("#version 330", 0) != 0)
+        throw std::runtime_error(std::string(fragment) + ": expected #version 330 first");
+    const std::string marker = "// SHARED_SKY";
+    const auto position = source.find(marker);
+    const bool consumer = std::strcmp(fragment, "water.fs") == 0 || std::strcmp(fragment, "sky.fs") == 0 ||
+                          std::strcmp(fragment, "drop.fs") == 0;
+    if (consumer && (position == std::string::npos || source.find(marker, position + marker.size()) != std::string::npos))
+        throw std::runtime_error(std::string(fragment) + ": expected one SHARED_SKY marker");
+    if (position != std::string::npos) source.replace(position, marker.size(), read_asset("sky.glsl"));
+    return source;
+}
+
+Shader SceneRenderer::load_shader(const char* vertex, const char* fragment) {
+    const auto vs = vertex ? read_asset(vertex) : std::string{};
+    const auto fs = fragment_source(fragment);
+    Shader shader = LoadShaderFromMemory(vertex ? vs.c_str() : nullptr, fs.c_str());
+    if (!shader.id || shader.id == rlGetShaderIdDefault()) {
+        UnloadShader(shader);
+        throw std::runtime_error(std::string("could not compile scene shader: ") + fragment);
+    }
+    return shader;
+}
+
 SceneRenderer::SceneRenderer(const Config& config) : config_(config) {
     if (!IsWindowReady()) throw std::runtime_error("scene renderer requires a current OpenGL context");
     try {
@@ -79,6 +117,17 @@ SceneRenderer::SceneRenderer(const Config& config) : config_(config) {
         appearance_handles.water_shader = water_shader_.id;
 #endif
         SCENE_CHECKPOINT(water_shader);
+        sky_shader_ = load_shader(nullptr, "sky.fs");
+        const auto w = [this](const char* name) { return required_uniform(water_shader_, name, "water.fs"); };
+        water_locations_ = {w("eyePosition"), w("captureView"), w("captureProjection"),
+                            w("captureColor"), w("captureDepth"), w("drawableSize"),
+                            w("clipPlanes"), w("simTime"), w("reflectionWeight")};
+        const auto s = [this](const char* name) { return required_uniform(sky_shader_, name, "sky.fs"); };
+        sky_locations_ = {s("cameraForward"), s("cameraRight"), s("cameraUp"), s("drawableSize"),
+                          s("logicalAspect"), s("tanHalfFov"), s("simTime")};
+        required_uniform(stone_shader_, "submergedOnly", "basin.fs");
+        required_uniform(stone_shader_, "mvp", "basin.vs");
+        required_uniform(water_shader_, "mvp", "water.vs");
         const float thickness = 0.18f, rim = 0.12f;
         const auto& g = config.grid;
         const float wall_y = (rim - config.depth) / 2;
@@ -252,16 +301,52 @@ void SceneRenderer::capture(const Camera3D& camera) {
 }
 
 void SceneRenderer::draw(const Camera3D& camera, const WaterRenderer& water,
-                         const std::vector<Drop>&, double, float) {
+                         const std::vector<Drop>&, double sim_time, float reflection) {
     capture(camera);
-    ClearBackground(Color{225, 231, 234, 255});
+    ClearBackground(BLACK);
     rlViewport(0, 0, GetRenderWidth(), GetRenderHeight());
+    const float time = static_cast<float>(sim_time);
+    const Vector2 drawable{static_cast<float>(GetRenderWidth()), static_cast<float>(GetRenderHeight())};
+    const Vector3 forward = normalized({camera.target.x-camera.position.x, camera.target.y-camera.position.y,
+                                        camera.target.z-camera.position.z});
+    const Vector3 right = normalized(cross(forward, camera.up)), up = cross(right, forward);
+    const float aspect = static_cast<float>(GetScreenWidth()) / GetScreenHeight();
+    const float fov = std::tan(camera.fovy * 0.5f * DEG2RAD);
+    SetShaderValue(sky_shader_, sky_locations_.forward, &forward, SHADER_UNIFORM_VEC3);
+    SetShaderValue(sky_shader_, sky_locations_.right, &right, SHADER_UNIFORM_VEC3);
+    SetShaderValue(sky_shader_, sky_locations_.up, &up, SHADER_UNIFORM_VEC3);
+    SetShaderValue(sky_shader_, sky_locations_.size, &drawable, SHADER_UNIFORM_VEC2);
+    SetShaderValue(sky_shader_, sky_locations_.aspect, &aspect, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(sky_shader_, sky_locations_.fov, &fov, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(sky_shader_, sky_locations_.time, &time, SHADER_UNIFORM_FLOAT);
+    BeginShaderMode(sky_shader_);
+    DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), WHITE);
+    EndShaderMode();
+    rlDrawRenderBatchActive();
     begin_3d(camera);
     view_ = rlGetMatrixModelview();
     projection_ = rlGetMatrixProjection();
     draw_basin(false);
-    SetShaderValue(water_shader_, GetShaderLocation(water_shader_, "eyePosition"), &camera.position, SHADER_UNIFORM_VEC3);
+    const Vector2 size{static_cast<float>(capture_.texture.width), static_cast<float>(capture_.texture.height)};
+    const Vector2 planes{static_cast<float>(rlGetCullDistanceNear()), static_cast<float>(rlGetCullDistanceFar())};
+    SetShaderValue(water_shader_, water_locations_.eye, &camera.position, SHADER_UNIFORM_VEC3);
+    SetShaderValue(water_shader_, water_locations_.time, &time, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(water_shader_, water_locations_.reflection, &reflection, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(water_shader_, water_locations_.size, &size, SHADER_UNIFORM_VEC2);
+    SetShaderValue(water_shader_, water_locations_.planes, &planes, SHADER_UNIFORM_VEC2);
+    SetShaderValueMatrix(water_shader_, water_locations_.view, capture_view_);
+    SetShaderValueMatrix(water_shader_, water_locations_.projection, capture_projection_);
+    const int color_slot = 1, depth_slot = 2;
+    SetShaderValue(water_shader_, water_locations_.color, &color_slot, SHADER_UNIFORM_INT);
+    SetShaderValue(water_shader_, water_locations_.depth, &depth_slot, SHADER_UNIFORM_INT);
+    // DrawMesh binds material maps directly; batched SetShaderValueTexture bindings do not apply.
+    rlActiveTextureSlot(color_slot); rlEnableTexture(capture_.texture.id);
+    rlActiveTextureSlot(depth_slot); rlEnableTexture(capture_.depth.id);
+    rlActiveTextureSlot(0);
     water.draw(water_shader_, identity);
+    rlActiveTextureSlot(depth_slot); rlDisableTexture();
+    rlActiveTextureSlot(color_slot); rlDisableTexture();
+    rlActiveTextureSlot(0);
     EndMode3D();
 }
 
@@ -270,10 +355,12 @@ void SceneRenderer::release() noexcept {
     UnloadMesh(basin_);
     if (stone_shader_.id) UnloadShader(stone_shader_);
     if (water_shader_.id) UnloadShader(water_shader_);
+    if (sky_shader_.id) UnloadShader(sky_shader_);
     capture_ = {};
     basin_ = {};
     stone_shader_ = {};
     water_shader_ = {};
+    sky_shader_ = {};
 }
 
 } // namespace water

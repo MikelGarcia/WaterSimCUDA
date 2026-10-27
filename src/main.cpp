@@ -1,14 +1,13 @@
 #include "app_controller.hpp"
 #include "timing_average.hpp"
 #include "water_renderer.hpp"
-#include <rlgl.h>
+#include "scene_renderer.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <filesystem>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -90,35 +89,6 @@ struct Window {
     ~Window() { CloseWindow(); }
 };
 
-struct WaterShader {
-    Shader value{};
-    WaterShader() {
-        const auto assets = std::filesystem::path(GetApplicationDirectory()) / "assets";
-        const auto vertex = (assets / "water.vs").string();
-        const auto fragment = (assets / "water.fs").string();
-        value = LoadShader(vertex.c_str(), fragment.c_str());
-        if (!IsShaderValid(value) || value.id == rlGetShaderIdDefault())
-            throw std::runtime_error("could not load water shaders from " + assets.string());
-    }
-    ~WaterShader() { UnloadShader(value); }
-};
-
-void draw_basin(const water::Config& config) {
-    const auto& g = config.grid;
-    const Color stone{122, 132, 138, 255};
-    const float thickness = 0.18f;
-    const float wall_height = config.depth + 0.12f;
-    const float wall_y = (0.12f - config.depth) / 2;
-    DrawCube({0, -config.depth - thickness / 2, 0}, g.lx + 2 * thickness,
-             thickness, g.lz + 2 * thickness, Color{91, 103, 112, 255});
-    for (float sign : {-1.0f, 1.0f}) {
-        DrawCube({sign * (g.lx + thickness) / 2, wall_y, 0}, thickness,
-                 wall_height, g.lz + 2 * thickness, stone);
-        DrawCube({0, wall_y, sign * (g.lz + thickness) / 2}, g.lx,
-                 wall_height, thickness, stone);
-    }
-}
-
 double validation_seconds(const char* name, double fallback) {
     const char* value = std::getenv(name);
     if (!value) return fallback;
@@ -138,11 +108,8 @@ void demo(const water::Config& config) {
     water::Simulation simulation(config);
     water::WaterRenderer renderer(config.grid);
     water::AppController app(simulation, config);
-    WaterShader shader;
+    water::SceneRenderer scene(config);
     GpuTimer timer;
-    const int eye_location = GetShaderLocation(shader.value, "eyePosition");
-    if (eye_location < 0) throw std::runtime_error("water shader is missing eyePosition");
-    const Matrix identity{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     Camera3D camera{};
     camera.target = {0, 0, 0};
     camera.up = {0, 1, 0};
@@ -195,13 +162,11 @@ void demo(const water::Config& config) {
         app.frame(elapsed, paused, rain, rate, strength, damping, spawn_view);
         timer.end(simulation.stream(), app.sim_time() != old_time);
         renderer.update(simulation);
-        SetShaderValue(shader.value, eye_location, &camera.position, SHADER_UNIFORM_VEC3);
+        if (!scene.resize(GetRenderWidth(), GetRenderHeight())) continue;
 
         BeginDrawing();
-        ClearBackground(Color{225, 231, 234, 255});
+        scene.draw(camera, renderer, app.drops(), app.sim_time(), config.reflection);
         BeginMode3D(camera);
-        draw_basin(config);
-        renderer.draw(shader.value, identity);
         for (const auto& drop : app.drops()) {
             const float height = static_cast<float>(water::drop_y(drop, app.sim_time())) +
                                  water::drop_radius;
