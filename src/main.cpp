@@ -1,4 +1,5 @@
 #include "app_controller.hpp"
+#include "timing_average.hpp"
 #include "water_renderer.hpp"
 #include <rlgl.h>
 
@@ -33,6 +34,7 @@ public:
     }
     ~GpuTimer() { release(); }
     void begin(cudaStream_t stream) {
+        const double now = GetTime();
         for (auto& sample : samples_) {
             if (!sample.pending) continue;
             const auto result = cudaEventQuery(sample.end);
@@ -40,8 +42,10 @@ public:
             check(result, "query simulation timing");
             check(cudaEventElapsedTime(&milliseconds_, sample.begin, sample.end),
                   "read simulation timing");
+            average_.record(now, milliseconds_);
             sample.pending = false;
         }
+        average_.update(now);
         current_ = nullptr;
         for (auto& sample : samples_) {
             if (sample.pending) continue;
@@ -56,6 +60,7 @@ public:
         current_->pending = advanced;
     }
     float milliseconds() const { return milliseconds_; }
+    float average_milliseconds() const { return average_.milliseconds(); }
 
 private:
     void release() noexcept {
@@ -72,6 +77,7 @@ private:
     std::array<Sample, 8> samples_{};
     Sample* current_ = nullptr;
     float milliseconds_ = 0;
+    water::TimingAverage average_{GetTime()};
 };
 
 struct Window {
@@ -201,11 +207,18 @@ void demo(const water::Config& config) {
                          0.055f, 6, 8, Color{34, 134, 205, 255});
         }
         EndMode3D();
-        DrawRectangle(20, 20, 690, 102, Fade(Color{246, 249, 250, 255}, 0.94f));
+        DrawRectangle(20, 20, 780, 102, Fade(Color{246, 249, 250, 255}, 0.94f));
         DrawText(paused ? "WATER  /  PAUSED" : "WATER", 36, 32, 22, Color{27, 52, 67, 255});
-        DrawText(TextFormat("%d FPS    GPU %.2f ms    Rain %s %.0f/s    Strength %.3f m    Damping %.2f/s",
-                           GetFPS(), timer.milliseconds(), rain ? "on" : "off", rate, strength, damping),
-                 36, 62, 16, Color{45, 65, 76, 255});
+        const Color status_color{45, 65, 76, 255};
+        DrawText(TextFormat("%d FPS", GetFPS()), 36, 62, 16, status_color);
+        DrawText(TextFormat("GPU %.2f ms", timer.average_milliseconds()),
+                 126, 62, 16, status_color);
+        DrawText(TextFormat("Rain %s %.0f/s", rain ? "on" : "off", rate),
+                 286, 62, 16, status_color);
+        DrawText(TextFormat("Strength %.3f m", strength),
+                 456, 62, 16, status_color);
+        DrawText(TextFormat("Damping %.2f/s", damping),
+                 650, 62, 16, status_color);
         DrawText("Click: drop   Right drag: orbit   Wheel: zoom   Space: pause   R: reset   T: rain",
                  36, 88, 16, Color{65, 83, 93, 255});
         DrawText("Up / Down: rain    Left / Right: strength    [ / ]: damping    Esc: close",

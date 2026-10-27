@@ -28,7 +28,7 @@ Keep the generated `assets` directory beside the executable. Launching from anot
 
 `water_demo --help` lists startup options with units and defaults. The default grid is 512 × 512 in a 20 m × 12 m basin, depth 1 m, damping 0.15/s, impact radius 0.35 m, strength 0.01 m, rain 8/s, seed 1. Grid sizes are 8–2048 per axis. Radius must span at least two cell widths and stay below one quarter of the shorter basin dimension. Startup damping accepts any finite nonnegative value; bracket controls use the range above.
 
-The overlay reports render FPS and the last completed CUDA simulation duration per frame. Timing queries do not wait for unfinished samples. A stalled frame advances at most eight 1/120 s quanta; simulated time slows under overload. There is no CPU water fallback.
+The overlay uses fixed status columns and reports render FPS plus the mean completed CUDA simulation duration over the trailing second, refreshed at most once per second and held between updates. An empty timing window displays zero at the next refresh. Timing queries do not wait for unfinished samples. A stalled frame advances at most eight 1/120 s quanta; simulated time slows under overload. There is no CPU water fallback.
 
 The desktop smoke test opens a bounded real window, renders from a different working directory, and exports a capture. For longer validation, set `WATER_VALIDATE_SECONDS` to the sample duration and `WATER_VALIDATE_WARMUP` to warm-up seconds (default 10). The application closes automatically and prints frame mean/p95 and FPS. Optional `WATER_VALIDATE_CAPTURE` gives an image output path; this explicitly downloads the framebuffer only after sampling. For example, from PowerShell:
 
@@ -42,4 +42,4 @@ Remove-Item Env:WATER_VALIDATE_SECONDS, Env:WATER_VALIDATE_WARMUP, Env:WATER_VAL
 
 These runs retain the normal 60 FPS cap. See [validation results and remaining manual checks](docs/validation.md).
 
-`ctest --test-dir build -C Release -L soak --output-on-failure` runs 120 simulated seconds of maximum seeded rain on each rectangular test grid. It uses the production controller and CUDA solver without opening a window, checking finite state, mean height, amplitude and the final 30-second envelope. The soak requires `WATER_BUILD_DEMO=ON` for raylib's scheduler types; `WATER_BUILD_DEMO=OFF` retains the raylib-free configuration, numerical and impact groups.
+`ctest --test-dir build -C Release -L soak --output-on-failure` runs 120 simulated seconds of maximum seeded rain on each rectangular test grid. It uses the production controller and CUDA solver without opening a window, checking finite state, mean height, amplitude and the final 30-second envelope. The soak requires `WATER_BUILD_DEMO=ON` for raylib's scheduler types; `WATER_BUILD_DEMO=OFF` retains the raylib-free configuration, numerical, impact and timing groups.
