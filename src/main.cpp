@@ -184,13 +184,15 @@ void demo(const water::Config& config) {
         camera.position = {distance * std::cos(pitch) * std::sin(yaw),
                            distance * std::sin(pitch),
                            distance * std::cos(pitch) * std::cos(yaw)};
+        const water::SpawnView spawn_view{camera,
+            static_cast<float>(GetScreenWidth()) / std::max(1, GetScreenHeight())};
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
             const auto hit = water::pick_water(GetScreenToWorldRay(GetMousePosition(), camera), config.grid);
-            if (hit) app.spawn(hit->x, hit->y);
+            if (hit) app.spawn(hit->x, hit->y, spawn_view);
         }
         timer.begin(simulation.stream());
         const double old_time = app.sim_time();
-        app.frame(elapsed, paused, rain, rate, strength, damping);
+        app.frame(elapsed, paused, rain, rate, strength, damping, spawn_view);
         timer.end(simulation.stream(), app.sim_time() != old_time);
         renderer.update(simulation);
         SetShaderValue(shader.value, eye_location, &camera.position, SHADER_UNIFORM_VEC3);
@@ -201,10 +203,10 @@ void demo(const water::Config& config) {
         draw_basin(config);
         renderer.draw(shader.value, identity);
         for (const auto& drop : app.drops()) {
-            const double phase = std::clamp((app.sim_time() - drop.start) / 0.6, 0.0, 1.0);
-            const float height = static_cast<float>(3 * (1 - phase * phase));
+            const float height = static_cast<float>(water::drop_y(drop, app.sim_time())) +
+                                 water::drop_radius;
             DrawSphereEx({drop.x - config.grid.lx / 2, height, drop.z - config.grid.lz / 2},
-                         0.055f, 6, 8, Color{34, 134, 205, 255});
+                         water::drop_radius, 6, 8, Color{34, 134, 205, 255});
         }
         EndMode3D();
         DrawRectangle(20, 20, 780, 102, Fade(Color{246, 249, 250, 255}, 0.94f));

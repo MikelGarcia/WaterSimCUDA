@@ -9,9 +9,9 @@ class AppController {
 public:
     AppController(Simulation& simulation, const Config& config);
     void frame(double wall_seconds, bool paused, bool rain_enabled, float rate,
-               float strength, float damping);
+               float strength, float damping, const SpawnView&);
     void reset();
-    bool spawn(float x, float z);
+    bool spawn(float x, float z, const SpawnView&);
     const std::vector<Drop>& drops() const { return scheduler_.active(); }
     double sim_time() const { return ticks_ * FixedClock::quantum; }
 

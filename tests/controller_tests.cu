@@ -5,6 +5,11 @@
 #include <algorithm>
 
 namespace {
+water::SpawnView view() {
+    return {{{17.5f, 21.8f, 23.2f}, {0, 0, 0}, {0, 1, 0}, 42,
+             CAMERA_PERSPECTIVE}, 1.5f};
+}
+
 water::Config fixture() {
     water::Config config;
     config.grid = {96, 64, 20.0f, 12.0f};
@@ -14,7 +19,7 @@ water::Config fixture() {
 
 void advance(water::AppController& app, int quanta) {
     for (int i = 0; i < quanta; ++i)
-        app.frame(1.0 / 120.0, false, false, 0, 0.01f, 0.15f);
+        app.frame(1.0 / 120.0, false, false, 0, 0.01f, 0.15f, view());
 }
 
 bool zero(const std::vector<float>& values) {
@@ -26,12 +31,12 @@ TEST_CASE("controller", stalled_frame_preserves_drop_and_limits_advancement) {
     const auto config = fixture();
     water::Simulation simulation(config);
     water::AppController app(simulation, config);
-    CHECK(app.spawn(10, 6));
-    app.frame(0.5, false, false, 0, 0.01f, 0.15f);
+    CHECK(app.spawn(10, 6, view()));
+    app.frame(0.5, false, false, 0, 0.01f, 0.15f, view());
     CHECK_NEAR(app.sim_time(), 8.0 / 120.0, 1e-14);
     CHECK(app.drops().size() == 1);
     CHECK(app.drops()[0].start == 0);
-    CHECK(app.drops()[0].arrival == 0.6);
+    CHECK_NEAR(app.drops()[0].arrival, std::sqrt(2 * app.drops()[0].spawn_height / 9.81), 1e-9);
     CHECK(zero(water::download(simulation).eta));
 }
 
@@ -42,7 +47,7 @@ TEST_CASE("controller", advances_valid_depth_at_float_timestep_rounding_boundary
     const water::Impact impact{10, 6, config.impact_radius, config.impact_strength};
     simulation.apply_impacts(&impact, 1);
     water::AppController app(simulation, config);
-    app.frame(1.0 / 120.0, false, false, 0, config.impact_strength, config.damping);
+    app.frame(1.0 / 120.0, false, false, 0, config.impact_strength, config.damping, view());
     CHECK_NEAR(app.sim_time(), 1.0 / 120.0, 1e-14);
     const auto state = water::download(simulation);
     CHECK(!zero(state.u));
@@ -53,14 +58,14 @@ TEST_CASE("controller", pause_freezes_time_drops_and_all_water_arrays) {
     const auto config = fixture();
     water::Simulation simulation(config);
     water::AppController app(simulation, config);
-    CHECK(app.spawn(10, 6));
-    advance(app, 73);
-    CHECK(app.spawn(4, 4));
+    CHECK(app.spawn(10, 6, view()));
+    advance(app, static_cast<int>(std::ceil(app.drops()[0].arrival * 120)));
+    CHECK(app.spawn(4, 4, view()));
     const auto before = water::download(simulation);
     CHECK(!zero(before.eta));
     const auto time = app.sim_time();
     const auto drop = app.drops()[0];
-    app.frame(10, true, true, 60, 0.02f, 5);
+    app.frame(10, true, true, 60, 0.02f, 5, view());
     const auto after = water::download(simulation);
     CHECK(app.sim_time() == time);
     CHECK(app.drops().size() == 1);
@@ -75,13 +80,14 @@ TEST_CASE("controller", arrival_applies_once_then_reset_clears_flight_and_water)
     const auto config = fixture();
     water::Simulation simulation(config);
     water::AppController app(simulation, config);
-    CHECK(app.spawn(10, 6));
-    advance(app, 71);
+    CHECK(app.spawn(10, 6, view()));
+    const int arrival_tick = static_cast<int>(std::ceil(app.drops()[0].arrival * 120));
+    advance(app, arrival_tick - 1);
     CHECK(zero(water::download(simulation).eta));
     advance(app, 2);
     CHECK(app.drops().empty());
     CHECK(!zero(water::download(simulation).eta));
-    CHECK(app.spawn(4, 4));
+    CHECK(app.spawn(4, 4, view()));
     app.reset();
     CHECK(app.sim_time() == 0);
     CHECK(app.drops().empty());
@@ -92,21 +98,90 @@ TEST_CASE("controller", arrival_applies_once_then_reset_clears_flight_and_water)
     CHECK(zero(state.eta) && zero(state.u) && zero(state.v));
 }
 
-TEST_CASE("controller", simultaneous_arrivals_above_batch_limit_are_all_applied) {
+TEST_CASE("controller", long_flights_preserve_capacity_and_batching) {
     const auto config = fixture();
     water::Simulation simulation(config);
     water::Simulation reference(config);
     water::AppController app(simulation, config);
-    for (int i = 0; i < 256; ++i) CHECK(app.spawn(10, 6));
-    CHECK(!app.spawn(10, 6));
-    advance(app, 73);
+    auto high = view();
+    high.camera.position = {0, 75, 1};
+    for (int i = 0; i < 256; ++i) CHECK(app.spawn(10, 6, high));
+    CHECK(!app.spawn(4, 4, high));
+    const int arrival_tick = static_cast<int>(std::ceil(app.drops()[0].arrival * 120));
+    CHECK(arrival_tick > 120);
+    for (int i = 0; i < arrival_tick - 1; ++i)
+        app.frame(1.0 / 120.0, false, true, 60, 0.01f, 0.15f, high);
+    CHECK(app.drops().size() == 256);
+    CHECK(zero(water::download(simulation).eta));
+    advance(app, 2);
     const water::Impact impact{10, 6, 0.75f, 0.01f};
     for (int i = 0; i < 256; ++i) reference.apply_impacts(&impact, 1);
-    // The impact precedes the substep at quantum 72; quantum 73 adds one more step.
     auto actual = water::download(simulation);
     for (int i = 0; i < 2; ++i) reference.step(1.0f / 120.0f, 0.15f);
     auto expected = water::download(reference);
     CHECK(app.drops().empty());
+    for (const auto pair : {std::make_pair(&actual.eta, &expected.eta),
+                            std::make_pair(&actual.u, &expected.u),
+                            std::make_pair(&actual.v, &expected.v)})
+        for (std::size_t i = 0; i < pair.first->size(); ++i)
+            CHECK_NEAR((*pair.first)[i], (*pair.second)[i], 2e-5f);
+    advance(app, arrival_tick);
+    CHECK(app.drops().empty());
+    for (int i = 0; i < arrival_tick; ++i) reference.step(1.0f / 120.0f, 0.15f);
+    actual = water::download(simulation);
+    expected = water::download(reference);
     for (std::size_t i = 0; i < actual.eta.size(); ++i)
         CHECK_NEAR(actual.eta[i], expected.eta[i], 2e-5f);
+}
+
+TEST_CASE("controller", manual_and_seeded_rain_births_keep_their_camera_trajectory) {
+    const auto config = fixture();
+    water::Simulation simulation(config);
+    water::AppController app(simulation, config);
+    auto initial = view();
+    initial.camera.position = {0, 75, 1};
+    CHECK(app.spawn(10, 6, initial));
+    const auto manual = app.drops()[0];
+    CHECK(manual.spawn_height > 75);
+    CHECK_NEAR(manual.arrival - manual.start, std::sqrt(2 * manual.spawn_height / 9.81), 1e-9);
+    for (int tick = 0; tick < 60; ++tick)
+        app.frame(1.0 / 120.0, false, true, 60, 0.01f, 0.15f, initial);
+    CHECK(app.drops().size() > 3);
+    const auto births = app.drops();
+    for (const auto& drop : births) {
+        CHECK(drop.spawn_height > 75);
+        const double duration = std::sqrt(2 * drop.spawn_height / 9.81);
+        CHECK_NEAR(drop.arrival - drop.start, duration, 1e-9 * duration);
+        CHECK_NEAR(water::drop_y(drop, drop.start + duration / 2),
+                   0.75 * drop.spawn_height, 1e-9 * drop.spawn_height);
+    }
+    const double held_time = app.sim_time();
+    app.frame(10, true, true, 60, 0.01f, 0.15f, view());
+    CHECK(app.sim_time() == held_time);
+    CHECK(app.drops().size() == births.size());
+    app.frame(1.0 / 120.0, false, true, 60, 0.01f, 0.15f, view());
+    for (std::size_t i = 0; i < births.size(); ++i) {
+        const auto& drop = app.drops()[i];
+        CHECK(drop.x == births[i].x && drop.z == births[i].z);
+        CHECK(drop.start == births[i].start && drop.arrival == births[i].arrival);
+        CHECK(drop.spawn_height == births[i].spawn_height);
+        CHECK(water::drop_y(drop, held_time) == water::drop_y(births[i], held_time));
+    }
+    for (int tick = 0; tick < 60; ++tick)
+        app.frame(1.0 / 120.0, false, true, 60, 0.01f, 0.15f, view());
+    CHECK(app.drops().size() > births.size());
+    CHECK(app.drops().back().spawn_height < 75);
+    app.reset();
+    CHECK(app.sim_time() == 0 && app.drops().empty());
+    CHECK(zero(water::download(simulation).eta));
+    CHECK(app.spawn(10, 6, initial));
+    for (int tick = 0; tick < 60; ++tick)
+        app.frame(1.0 / 120.0, false, true, 60, 0.01f, 0.15f, initial);
+    CHECK(app.drops().size() == births.size());
+    for (std::size_t i = 0; i < births.size(); ++i) {
+        CHECK(app.drops()[i].x == births[i].x && app.drops()[i].z == births[i].z);
+        CHECK(app.drops()[i].start == births[i].start);
+        CHECK(app.drops()[i].arrival == births[i].arrival);
+        CHECK(app.drops()[i].spawn_height == births[i].spawn_height);
+    }
 }

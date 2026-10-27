@@ -8,6 +8,11 @@
 #include <numeric>
 
 namespace {
+water::SpawnView view() {
+    return {{{17.5f, 21.8f, 23.2f}, {0, 0, 0}, {0, 1, 0}, 42,
+             CAMERA_PERSPECTIVE}, 1.5f};
+}
+
 void sustained_rain(int nx, int ny) {
     water::Config config;
     config.grid = {nx, ny, 20.0f, 12.0f};
@@ -24,7 +29,7 @@ void sustained_rain(int nx, int ny) {
     for (int second = 1; second <= 120; ++second) {
         for (int tick = 0; tick < 120; ++tick)
             app.frame(water::FixedClock::quantum, false, true, config.rain_rate,
-                      config.impact_strength, config.damping);
+                      config.impact_strength, config.damping, view());
         const auto state = water::download(simulation);
         for (const auto* values : {&state.eta, &state.u, &state.v})
             for (float value : *values) CHECK(std::isfinite(value));

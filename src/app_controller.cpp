@@ -8,11 +8,11 @@ AppController::AppController(Simulation& simulation, const Config& config)
       dt_(static_cast<float>(FixedClock::quantum / substeps_)) {}
 
 void AppController::frame(double wall_seconds, bool paused, bool rain_enabled, float rate,
-                          float strength, float damping) {
+                          float strength, float damping, const SpawnView& view) {
     const int quanta = clock_.advance(wall_seconds, paused);
     for (int tick = 0; tick < quanta; ++tick) {
         const auto impacts = scheduler_.tick((ticks_ + 1) * FixedClock::quantum,
-                                              rain_enabled, rate, strength);
+                                              rain_enabled, rate, strength, view);
         for (std::size_t first = 0; first < impacts.size(); first += 64) {
             simulation_.apply_impacts(impacts.data() + first,
                                      std::min<std::size_t>(64, impacts.size() - first));
@@ -29,8 +29,8 @@ void AppController::reset() {
     ticks_ = 0;
 }
 
-bool AppController::spawn(float x, float z) {
-    return scheduler_.spawn(x, z, sim_time());
+bool AppController::spawn(float x, float z, const SpawnView& view) {
+    return scheduler_.spawn(x, z, sim_time(), view);
 }
 
 } // namespace water
