@@ -14,10 +14,10 @@
 namespace {
 
 struct Context {
-    Context() {
+    Context(int width = 840, int height = 560) {
         SetTraceLogLevel(LOG_WARNING);
         SetConfigFlags(FLAG_WINDOW_HIDDEN);
-        InitWindow(840, 560, "Water appearance validation");
+        InitWindow(width, height, "Water appearance validation");
         if (!IsWindowReady()) throw std::runtime_error("hidden OpenGL context could not be created");
         water::select_gl_cuda_device();
         std::cout << "GL renderer: " << glGetString(GL_RENDERER) << '\n';
@@ -204,9 +204,13 @@ TEST_CASE("appearance", drop_mesh_obeys_spawn_bounds) {
     CHECK_NEAR(bottom, 0.0f, 0.00001f); CHECK_NEAR(top, 0.28f, 0.00001f);
     CHECK(lower_radius > 0.06f && upper_radius < 0.025f);
     const water::Grid grid{96, 64, 20, 12};
+    auto config = small_config();
+    config.grid = grid;
+    water::DropScheduler scheduler(config);
     for (float pitch : {0.15f, 0.72f, 1.45f})
     for (float yaw : {0.0f, 0.65f, 1.8f, 3.4f, 4.9f})
-    for (float scale : {0.4f, 1.65f, 4.0f}) {
+    for (float scale : {0.4f, 1.65f, 4.0f})
+    for (float aspect : {1.5f, 1.6f}) {
         const float distance = scale * 20;
         const Camera3D view{{distance*std::cos(pitch)*std::sin(yaw), distance*std::sin(pitch),
                              distance*std::cos(pitch)*std::cos(yaw)}, {0,0,0}, {0,1,0}, 42, CAMERA_PERSPECTIVE};
@@ -214,7 +218,9 @@ TEST_CASE("appearance", drop_mesh_obeys_spawn_bounds) {
         const Vector3 forward{-eye.x/distance, -eye.y/distance, -eye.z/distance};
         const Vector3 up{-std::sin(pitch)*std::sin(yaw), std::cos(pitch), -std::sin(pitch)*std::cos(yaw)};
         for (const Vector2 point : {Vector2{0,0}, {20,0}, {0,12}, {20,12}, {10,6}}) {
-            const double height = water::drop_spawn_height(point.x, point.y, grid, {view, 1.5f});
+            scheduler.reset();
+            CHECK(scheduler.spawn(point.x, point.y, 0, {view, aspect}));
+            const double height = scheduler.active().front().spawn_height;
             bool above = true, behind = true;
             for (int i = 0; i < mesh.vertexCount; ++i) {
                 const double x = point.x-10 + mesh.vertices[3*i]-eye.x;
@@ -331,28 +337,38 @@ TEST_CASE("appearance", mix_endpoints_are_exact_color_weights) {
     auto config = small_config();
     water::Simulation simulation(config);
     water::WaterRenderer water(config.grid);
-    water.update(simulation);
     water::SceneRenderer scene(config);
     CHECK(scene.resize(840, 560));
-    std::array<std::vector<unsigned char>, 3> images;
-    for (int i = 0; i < 3; ++i) {
-        BeginDrawing();
-        scene.draw(camera, water, {}, 12, i * 0.5f);
-        rlDrawRenderBatchActive();
-        images[i].resize(80 * 40 * 4);
-        glReadPixels(380, 260, 80, 40, GL_RGBA, GL_UNSIGNED_BYTE, images[i].data());
-        EndDrawing();
-    }
-    int difference = 0;
-    for (std::size_t pixel = 0; pixel < images[0].size(); pixel += 4) {
-        for (int c = 0; c < 3; ++c) {
-            CHECK_NEAR(float(images[1][pixel + c]),
-                       0.5f * (images[0][pixel + c] + images[2][pixel + c]), 2.0f);
-            difference += std::abs(int(images[0][pixel + c]) - int(images[2][pixel + c]));
+    for (bool impacted : {false, true}) {
+        if (impacted) {
+            const water::Impact impact{2, 3, 1, 0.02f};
+            simulation.apply_impacts(&impact, 1);
         }
-        CHECK(images[1][pixel + 3] == 255);
+        water.update(simulation);
+        for (const Camera3D view : {camera,
+                Camera3D{{0, 0.36f, 2.373f}, {0, 0, 0}, {0, 1, 0}, 42, CAMERA_PERSPECTIVE},
+                Camera3D{{0, 23.825f, 2.892f}, {0, 0, 0}, {0, 1, 0}, 42, CAMERA_PERSPECTIVE}}) {
+            std::array<std::vector<unsigned char>, 3> images;
+            for (int i = 0; i < 3; ++i) {
+                BeginDrawing();
+                scene.draw(view, water, {}, 12, i * 0.5f);
+                rlDrawRenderBatchActive();
+                images[i].resize(80 * 40 * 4);
+                glReadPixels(380, 260, 80, 40, GL_RGBA, GL_UNSIGNED_BYTE, images[i].data());
+                EndDrawing();
+            }
+            int difference = 0;
+            for (std::size_t pixel = 0; pixel < images[0].size(); pixel += 4) {
+                for (int c = 0; c < 3; ++c) {
+                    CHECK_NEAR(float(images[1][pixel + c]),
+                               0.5f * (images[0][pixel + c] + images[2][pixel + c]), 2.0f);
+                    difference += std::abs(int(images[0][pixel + c]) - int(images[2][pixel + c]));
+                }
+                CHECK(images[1][pixel + 3] == 255);
+            }
+            CHECK(difference > 80 * 40 * 20);
+        }
     }
-    CHECK(difference > 80 * 40 * 20);
     CHECK(glGetError() == GL_NO_ERROR);
 }
 
@@ -753,6 +769,157 @@ TEST_CASE("appearance", capture_and_main_projection_align_at_drawable_sizes) {
         unsigned char ui[4]{};
         glReadPixels(5, GetRenderHeight() - 6, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, ui);
         CHECK(ui[0] == 255 && ui[1] == 0 && ui[2] == 255);
+        EndDrawing();
+        CHECK(glGetError() == GL_NO_ERROR);
+    }
+}
+
+TEST_CASE("appearance", capture_orientation_and_hidpi_projection_match_known_floor_points) {
+    Context context;
+    water::SceneRenderer scene(small_config());
+    const Camera3D view{{3, 5, 8}, {0, -0.4f, 0}, {0, 1, 0}, 45, CAMERA_PERSPECTIVE};
+    const Vector3 points[]{{-1.13f, -1, -1.73f}, {0.8f, -1, 0.37f}, {1.05f, -1, 1.43f}};
+    // Independent pinhole projection and floor intersection, without raylib's projection helpers.
+    const double length = std::sqrt(3.0 * 3.0 + 5.4 * 5.4 + 8.0 * 8.0);
+    const double fx = -3.0 / length, fy = -5.4 / length, fz = -8.0 / length;
+    const double rx = 8 / std::sqrt(73.0), rz = -3 / std::sqrt(73.0);
+    const double ux = -rz * fy, uy = rz * fx - rx * fz, uz = rx * fy;
+    const double tangent = std::tan(22.5 * DEG2RAD);
+    std::array<Sample, 3> original{};
+    for (const auto size : {std::array<int, 2>{840, 560}, {1260, 840}, {900, 600}, {840, 560}}) {
+        CHECK(GetScreenWidth() == 840 && GetScreenHeight() == 560);
+        CHECK(scene.resize(size[0], size[1]));
+        BeginDrawing();
+        water::SceneValidation::capture(scene, view);
+        const auto target = water::SceneValidation::target(scene);
+        for (int i = 0; i < 3; ++i) {
+            const auto point = points[i];
+            const double depth = (point.x - 3) * fx + (point.y - 5) * fy + (point.z - 8) * fz;
+            const double horizontal = (point.x - 3) * rx + (point.z - 8) * rz;
+            const double vertical = (point.x - 3) * ux + (point.y - 5) * uy + (point.z - 8) * uz;
+            const double logical_x = 420 * (1 + horizontal / (depth * tangent * 1.5));
+            const double logical_y = 280 * (1 - vertical / (depth * tangent));
+            const int x = int(logical_x * size[0] / 840);
+            const int y = size[1] - 1 - int(logical_y * size[1] / 560);
+            const auto pixel = sample(target, x, y);
+            CHECK(pixel.color[3] == 255 && pixel.color[0] > 35);
+            // The middle sample is a dark mortar joint; the others lie inside stone tiles.
+            CHECK(i == 1 ? pixel.color[0] < 80 : pixel.color[0] > 85);
+            const double screen_x = (2.0 * (x + 0.5) / size[0] - 1) * tangent * 1.5;
+            const double screen_y = (2.0 * (y + 0.5) / size[1] - 1) * tangent;
+            const double ray_x = fx + screen_x * rx + screen_y * ux;
+            const double ray_y = fy + screen_y * uy, ray_z = fz + screen_x * rz + screen_y * uz;
+            const double distance = -6 / ray_y;
+            const Vector3 floor{float(3 + distance * ray_x), -1, float(8 + distance * ray_z)};
+            CHECK_NEAR(pixel.depth, expected_depth(floor, view), 0.0000003f);
+            if (size[0] == 840) {
+                if (original[i].depth == 1) original[i] = pixel;
+                else CHECK(original[i].color == pixel.color && original[i].depth == pixel.depth);
+            }
+        }
+        EndDrawing();
+        const auto retained = target.id;
+        CHECK(!scene.resize(0, 0));
+        CHECK(water::SceneValidation::target(scene).id == retained);
+    }
+    CHECK(glGetError() == GL_NO_ERROR);
+}
+
+TEST_CASE("appearance", controller_pause_resume_and_reset_preserve_scene_clock) {
+    Context context;
+    auto config = small_config();
+    water::Simulation simulation(config);
+    water::AppController app(simulation, config);
+    water::WaterRenderer water(config.grid);
+    water::SceneRenderer scene(config);
+    CHECK(scene.resize(840, 560));
+    const water::SpawnView view{camera, 1.5f};
+    std::filesystem::create_directories("appearance-captures");
+    const auto capture = [&](const char* path) {
+        water.update(simulation);
+        BeginDrawing();
+        scene.draw(camera, water, app.drops(), app.sim_time(), 0.5f);
+        std::vector<unsigned char> pixels(840 * 560 * 4);
+        glReadPixels(0, 0, 840, 560, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        const auto image = LoadImageFromScreen();
+        CHECK(ExportImage(image, path));
+        UnloadImage(image);
+        EndDrawing();
+        return pixels;
+    };
+    const auto initial = capture("appearance-captures/clock-initial.png");
+    for (int tick = 0; tick < 120; ++tick)
+        app.frame(water::FixedClock::quantum, false, true, 8, 0.01f, 0.15f, view);
+    CHECK(app.sim_time() == 1 && !app.drops().empty());
+    const auto running = capture("appearance-captures/clock-running.png");
+    app.frame(30, true, true, 8, 0.01f, 0.15f, view);
+    CHECK(app.sim_time() == 1);
+    CHECK(capture("appearance-captures/clock-paused.png") == running);
+    app.frame(water::FixedClock::quantum, false, true, 8, 0.01f, 0.15f, view);
+    CHECK_NEAR(app.sim_time(), 1 + water::FixedClock::quantum, 1e-12);
+    CHECK(capture("appearance-captures/clock-resumed.png") != running);
+    app.reset();
+    CHECK(app.sim_time() == 0 && app.drops().empty());
+    CHECK(capture("appearance-captures/clock-reset.png") == initial);
+    for (int tick = 0; tick < 120; ++tick)
+        app.frame(water::FixedClock::quantum, false, true, 8, 0.01f, 0.15f, view);
+    CHECK(capture("appearance-captures/clock-reseeded.png") == running);
+    CHECK(glGetError() == GL_NO_ERROR);
+}
+
+TEST_CASE("appearance", rendered_acceptance_matrix) {
+    Context context(1280, 800);
+    struct Scenario {
+        const char* name;
+        int nx, ny, width, height;
+        float time, mix, pitch, zoom, yaw;
+        bool impacted;
+    };
+    const Scenario scenarios[]{
+        {"default-t0-r0", 512,512,1280,800, 0,0,0.72f,1.65f,0.65f,false},
+        {"default-t0-r05",512,512,1280,800, 0,.5f,0.72f,1.65f,0.65f,false},
+        {"default-t0-r1", 512,512,1280,800, 0,1,0.72f,1.65f,0.65f,false},
+        {"default-t30-r0",512,512,1280,800,30,0,0.72f,1.65f,0.65f,true},
+        {"default-t30-r05",512,512,1280,800,30,.5f,0.72f,1.65f,0.65f,true},
+        {"default-t30-r1",512,512,1280,800,30,1,0.72f,1.65f,0.65f,true},
+        {"wide-low-near",96,64,840,560,30,.5f,0.15f,0.4f,1.8f,true},
+        {"wide-high-far",96,64,840,560,0,0,1.45f,4,3.4f,false},
+        {"tall-high-near",64,96,840,560,30,1,1.45f,0.4f,4.9f,true},
+        {"tall-low-far",64,96,1280,800,0,.5f,0.15f,4,0,false},
+        {"sun-visible",96,64,1280,800,0,1,1.09f,1.65f,0.719f,false},
+        {"sun-clouded",96,64,1280,800,389,1,1.09f,1.65f,0.719f,false}
+    };
+    std::filesystem::create_directories("appearance-captures");
+    for (const auto& scenario : scenarios) {
+        SetWindowSize(scenario.width, scenario.height);
+        CHECK(GetScreenWidth() == scenario.width && GetScreenHeight() == scenario.height);
+        water::Config config;
+        config.grid.nx = scenario.nx; config.grid.ny = scenario.ny;
+        if (scenario.nx != 512) config.impact_radius = 0.75f;
+        water::Simulation simulation(config);
+        water::AppController app(simulation, config);
+        water::WaterRenderer water(config.grid);
+        water::SceneRenderer scene(config);
+        CHECK(scene.resize(GetRenderWidth(), GetRenderHeight()));
+        const float distance = scenario.zoom * 20;
+        const Camera3D view{{distance*std::cos(scenario.pitch)*std::sin(scenario.yaw), distance*std::sin(scenario.pitch),
+                            distance*std::cos(scenario.pitch)*std::cos(scenario.yaw)},
+                            {0,0,0}, {0,1,0}, 42, CAMERA_PERSPECTIVE};
+        if (scenario.impacted) {
+            const water::SpawnView spawn_view{view, float(scenario.width)/scenario.height};
+            CHECK(app.spawn(10, 6, spawn_view));
+            for (int tick = 0; tick < int(scenario.time * 120); ++tick)
+                app.frame(water::FixedClock::quantum, false, true, 8, 0.01f, 0.15f, spawn_view);
+            CHECK_NEAR(app.sim_time(), scenario.time, 1e-10);
+        }
+        water.update(simulation);
+        BeginDrawing();
+        scene.draw(view, water, app.drops(), scenario.time, scenario.mix);
+        const auto image = LoadImageFromScreen();
+        const auto path = std::string("appearance-captures/") + scenario.name + ".png";
+        CHECK(image.width == scenario.width && image.height == scenario.height);
+        CHECK(ExportImage(image, path.c_str()));
+        UnloadImage(image);
         EndDrawing();
         CHECK(glGetError() == GL_NO_ERROR);
     }
