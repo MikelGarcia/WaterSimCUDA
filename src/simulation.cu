@@ -202,21 +202,55 @@ __global__ void apply_impact_batch(float* eta, ImpactBatch batch, const double2*
     eta[i] = height;
 }
 
+__device__ float wake_bump(float q) {
+    if (fabsf(q) >= 1) return 0;
+    const float a = 1 - q * q;
+    return a * a * a;
+}
+
+__device__ float smooth_gain(float x) {
+    x = fminf(1, fmaxf(0, x));
+    return x * x * (3 - 2 * x);
+}
+
+__device__ float wake_head(float x, float z, const BoatState& b,
+                           float dx, float dz, float depth) {
+    const float speed_squared = b.vx * b.vx + b.vz * b.vz;
+    if (speed_squared <= 1e-8f) return 0;
+    const float c = cosf(b.yaw), s = sinf(b.yaw);
+    const float l = (x - b.x) * c + (z - b.z) * s;
+    const float t = -(x - b.x) * s + (z - b.z) * c;
+    const float length = fmaxf(boat_geometry.length, 4 * fmaxf(dx, dz));
+    const float width = fmaxf(boat_geometry.beam, 2 * fmaxf(dx, dz));
+    const float bow = wake_bump((l - .25f * length) / (.5f * length)) * wake_bump(t / width) -
+        .5f * wake_bump((l + .35f * length) / (.75f * length)) * wake_bump(t / (1.5f * width));
+    const float stern = wake_bump((-l - .25f * length) / (.5f * length)) * wake_bump(t / width) -
+        .5f * wake_bump((-l + .35f * length) / (.75f * length)) * wake_bump(t / (1.5f * width));
+    const float blend = smooth_gain((b.vx * c + b.vz * s + .01f) / .02f);
+    const float amplitude = .002f * (speed_squared / 2.25f) *
+        smooth_gain((sqrtf(speed_squared) - .0001f) / .0099f) * fminf(1, depth / 1.0f);
+    return amplitude * (blend * bow + (1 - blend) * stern);
+}
+
 __global__ void update_velocity(const float* eta, float* u, float* v,
                                 int nx, int ny, float dx, float dz,
-                                float gravity_dt, float drag) {
+                                float gravity_dt, float drag, const BoatState* boat, float depth) {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < ny * (nx + 1)) {
         const int x = i % (nx + 1);
         const int y = i / (nx + 1);
         u[i] = (x == 0 || x == nx) ? 0.0f :
-            (u[i] - gravity_dt * (eta[y * nx + x] - eta[y * nx + x - 1]) / dx) / drag;
+            (u[i] - gravity_dt * (eta[y * nx + x] - eta[y * nx + x - 1] +
+                wake_head((x + .5f) * dx, (y + .5f) * dz, *boat, dx, dz, depth) -
+                wake_head((x - .5f) * dx, (y + .5f) * dz, *boat, dx, dz, depth)) / dx) / drag;
     }
     if (i < (ny + 1) * nx) {
         const int x = i % nx;
         const int y = i / nx;
         v[i] = (y == 0 || y == ny) ? 0.0f :
-            (v[i] - gravity_dt * (eta[y * nx + x] - eta[(y - 1) * nx + x]) / dz) / drag;
+            (v[i] - gravity_dt * (eta[y * nx + x] - eta[(y - 1) * nx + x] +
+                wake_head((x + .5f) * dx, (y + .5f) * dz, *boat, dx, dz, depth) -
+                wake_head((x + .5f) * dx, (y - .5f) * dz, *boat, dx, dz, depth)) / dz) / drag;
     }
 }
 
@@ -401,7 +435,8 @@ void Simulation::step(float dt, float damping, BoatControl control) {
     const float dx = g.lx / g.nx;
     const float dz = g.lz / g.ny;
     update_velocity<<<(faces + threads - 1) / threads, threads, 0, stream_>>>(
-        eta_, u_, v_, g.nx, g.ny, dx, dz, config_.gravity * dt, 1.0f + damping * dt);
+        eta_, u_, v_, g.nx, g.ny, dx, dz, config_.gravity * dt, 1.0f + damping * dt,
+        boat_, config_.depth);
     check(cudaGetLastError(), "launch velocity update");
     update_height<<<(g.nx * g.ny + threads - 1) / threads, threads, 0, stream_>>>(
         eta_, u_, v_, g.nx, g.ny, dx, dz, config_.depth * dt);
