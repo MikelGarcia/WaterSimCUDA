@@ -169,11 +169,12 @@ TEST_CASE("timeline", capacity_rejection_creates_no_later_impact) {
     CHECK(drops.spawn(7.0f, 8.0f, deadline + 1, view()));
 }
 
-TEST_CASE("timeline", seeded_rain_is_reproducible_and_stays_inside_basin) {
+TEST_CASE("timeline", seeded_rain_is_reproducible_in_finite_ambient_field) {
     water::Config config;
     config.seed = 987;
     water::DropScheduler first(config), second(config);
     std::size_t impacts = 0;
+    bool inside = false, outside = false;
     for (int step = 1; step <= 2400; ++step) {
         const double time = step / 120.0;
         const auto a = first.tick(time, true, 60.0f, 0.01f, view());
@@ -184,17 +185,22 @@ TEST_CASE("timeline", seeded_rain_is_reproducible_and_stays_inside_basin) {
         for (std::size_t i = 0; i < first.active().size(); ++i) {
             const auto& drop = first.active()[i];
             const auto& repeated = second.active()[i];
-            CHECK(drop.x >= 0.0f && drop.x <= 20.0f);
-            CHECK(drop.z >= 0.0f && drop.z <= 12.0f);
+            CHECK(drop.x >= -10 && drop.x <= 37.5f);
+            CHECK(drop.z >= -10 && drop.z <= 39.2f);
+            const bool pool = drop.x >= 0 && drop.x <= 20 && drop.z >= 0 && drop.z <= 12;
+            inside |= pool;
+            outside |= !pool;
             CHECK(drop.start == repeated.start);
             CHECK(drop.x == repeated.x && drop.z == repeated.z);
             CHECK_NEAR(drop.arrival - drop.start, std::sqrt(2 * drop.spawn_height / 9.81), 1e-9);
         }
         for (std::size_t i = 0; i < a.size(); ++i) {
             CHECK(a[i].x == b[i].x && a[i].z == b[i].z);
+            CHECK(a[i].x >= 0 && a[i].x <= 20 && a[i].z >= 0 && a[i].z <= 12);
         }
     }
-    CHECK(impacts > 900 && impacts < 1500);
+    CHECK(inside && outside);
+    CHECK(impacts > 20 && impacts < 300);
 }
 
 TEST_CASE("timeline", rain_schedule_does_not_depend_on_tick_partition) {
@@ -240,8 +246,10 @@ TEST_CASE("timeline", long_rain_interval_has_bounded_work_and_no_later_backlog) 
     const auto events = drops.tick(10000.0, true, 60.0f, 0.01f, view());
     CHECK(events.size() <= 256);
     CHECK(!events.empty());
-    CHECK(events.size() + drops.active().size() == 256);
-    const auto pending = drops.active().size();
+    CHECK(events.size() + drops.active().size() <= 256);
+    const auto pending = std::count_if(drops.active().begin(), drops.active().end(), [](const water::Drop& drop) {
+        return drop.x >= 0 && drop.x <= 20 && drop.z >= 0 && drop.z <= 12;
+    });
     CHECK(drops.tick(10000.0, true, 60.0f, 0.01f, view()).empty());
     CHECK(drops.tick(10100.0, false, 60.0f, 0.01f, view()).size() == pending);
 }
@@ -253,7 +261,10 @@ TEST_CASE("timeline", disabling_rain_keeps_falling_drops_without_backlog) {
     CHECK(falling > 0);
     CHECK(drops.tick(0.21, false, 60.0f, 0.01f, view()).empty());
     CHECK(drops.active().size() == falling);
-    CHECK(drops.tick(100.0, false, 60.0f, 0.01f, view()).size() == falling);
+    const auto pool_flights = std::count_if(drops.active().begin(), drops.active().end(), [](const water::Drop& drop) {
+        return drop.x >= 0 && drop.x <= 20 && drop.z >= 0 && drop.z <= 12;
+    });
+    CHECK(drops.tick(100.0, false, 60.0f, 0.01f, view()).size() == pool_flights);
     CHECK(drops.active().empty());
     CHECK(drops.tick(100.0, true, 60.0f, 0.01f, view()).empty());
     CHECK(drops.active().empty());
@@ -291,6 +302,7 @@ TEST_CASE("timeline", reset_restarts_seed_schedule_and_removes_manual_drops) {
     CHECK(!a.empty());
     for (std::size_t i = 0; i < a.size(); ++i) {
         CHECK(a[i].x == b[i].x && a[i].z == b[i].z);
+            CHECK(a[i].x >= 0 && a[i].x <= 20 && a[i].z >= 0 && a[i].z <= 12);
     }
 }
 
@@ -385,4 +397,50 @@ TEST_CASE("timeline", depth_changes_preserve_flights_random_schedule_and_strengt
     }
     actual.reset();
     CHECK_THROWS(actual.tick(.1, false, 0, .006f, view()), std::invalid_argument);
+}
+
+TEST_CASE("timeline", exterior_rain_disappears_without_impact) {
+    water::DropScheduler drops(water::Config{});
+    double time = 0;
+    while (drops.active().empty()) drops.tick(time += 1.0 / 120, true, 60, .01f, view());
+    CHECK(drops.active().size() == 1);
+    const auto first = drops.active()[0];
+    CHECK(first.x < 0 || first.x > 20 || first.z < 0 || first.z > 12);
+    CHECK(drops.tick(first.arrival, false, 0, .01f, view()).empty());
+    CHECK(drops.active().empty());
+}
+
+TEST_CASE("timeline", inclusive_water_edges_arrive_but_outside_clicks_fail) {
+    water::DropScheduler drops(water::Config{});
+    for (Vector2 p : {Vector2{0,0}, {20,0}, {0,12}, {20,12}, {10,0}, {20,6}})
+        CHECK(drops.spawn(p.x, p.y, 0, view()));
+    CHECK(!drops.spawn(-.001f, 0, 0, view()));
+    CHECK(!drops.spawn(20.001f, 0, 0, view()));
+    CHECK(drops.tick(100, false, 0, .01f, view()).size() == 6);
+    CHECK(drops.active().empty());
+}
+
+TEST_CASE("timeline", camera_motion_changes_only_future_ambient_births) {
+    water::DropScheduler actual(water::Config{}), reference(water::Config{});
+    actual.tick(.2, true, 60, .01f, view());
+    reference.tick(.2, true, 60, .01f, view());
+    const auto before = actual.active();
+    auto moved = view();
+    moved.camera.position = {-70, 60, -50};
+    actual.tick(.5, true, 60, .01f, moved);
+    reference.tick(.5, true, 60, .01f, view());
+    CHECK(actual.active().size() > before.size());
+    for (std::size_t i = 0; i < before.size(); ++i) {
+        const auto drop = actual.active()[i], previous = before[i];
+        CHECK(drop.x == previous.x && drop.z == previous.z && drop.start == previous.start);
+        CHECK(drop.arrival == previous.arrival && drop.spawn_height == previous.spawn_height);
+    }
+    bool changed = false;
+    for (std::size_t i = before.size(); i < actual.active().size(); ++i) {
+        const auto drop = actual.active()[i];
+        CHECK(drop.x >= -70 && drop.x <= 30 && drop.z >= -54 && drop.z <= 22);
+        CHECK(drop.start == reference.active()[i].start);
+        changed |= drop.x != reference.active()[i].x || drop.z != reference.active()[i].z;
+    }
+    CHECK(changed);
 }

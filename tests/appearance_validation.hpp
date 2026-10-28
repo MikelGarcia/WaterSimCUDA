@@ -5,7 +5,7 @@
 namespace water {
 
 enum class AppearanceFault {
-    none, stone_shader, water_shader, basin_mesh, framebuffer, color_texture,
+    none, grass_shader, grass_mesh, stone_shader, water_shader, basin_mesh, framebuffer, color_texture,
     depth_texture, color_attachment, depth_attachment, complete
 };
 extern AppearanceFault appearance_fault;
@@ -13,10 +13,12 @@ struct AppearanceHandles {
     unsigned framebuffer = 0, color = 0, depth = 0;
     unsigned stone_shader = 0, water_shader = 0, vertex_array = 0;
     unsigned positions = 0, normals = 0;
+    unsigned grass_shader = 0, grass_vertex_array = 0, grass_positions = 0, grass_normals = 0;
 };
 extern AppearanceHandles appearance_handles;
 
 struct SceneValidation {
+    static const Mesh& grass_mesh(const SceneRenderer& scene) { return scene.grass_; }
     static const Mesh& basin_mesh(const SceneRenderer& scene) { return scene.basin_; }
     static const Mesh& drop_mesh(const SceneRenderer& scene) { return scene.drop_; }
     static std::string fragment_source(const char* fragment) { return SceneRenderer::fragment_source(fragment); }

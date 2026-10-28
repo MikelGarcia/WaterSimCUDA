@@ -42,6 +42,7 @@ public:
     void reset();
 
 private:
+    bool add_drop(float x, float z, double sim_time, const SpawnView&);
     void collect_arrivals(double end_time, float strength, std::vector<Impact>& events);
 
     Config config_;

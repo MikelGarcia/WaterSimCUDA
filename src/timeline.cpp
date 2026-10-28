@@ -84,8 +84,12 @@ bool DropScheduler::spawn(float x, float z, double sim_time, const SpawnView& vi
         throw std::invalid_argument("drop time must be finite and monotonic");
     }
     if (!std::isfinite(x) || !std::isfinite(z) ||
-        x < 0.0f || x > config_.grid.lx || z < 0.0f || z > config_.grid.lz ||
-        active_.size() == 256) return false;
+        x < 0.0f || x > config_.grid.lx || z < 0.0f || z > config_.grid.lz) return false;
+    return add_drop(x, z, sim_time, view);
+}
+
+bool DropScheduler::add_drop(float x, float z, double sim_time, const SpawnView& view) {
+    if (active_.size() == 256) return false;
     const double height = drop_spawn_height(x, z, config_.grid, view);
     active_.push_back({x, z, height, sim_time,
                        sim_time + std::sqrt(2 * height / drop_acceleration)});
@@ -95,7 +99,8 @@ bool DropScheduler::spawn(float x, float z, double sim_time, const SpawnView& vi
 void DropScheduler::collect_arrivals(double end_time, float strength, std::vector<Impact>& events) {
     const auto remaining = std::remove_if(active_.begin(), active_.end(), [&](const Drop& drop) {
         if (drop.arrival > end_time) return false;
-        events.push_back({drop.x, drop.z, config_.impact_radius, strength});
+        if (drop.x >= 0 && drop.x <= config_.grid.lx && drop.z >= 0 && drop.z <= config_.grid.lz)
+            events.push_back({drop.x, drop.z, config_.impact_radius, strength});
         return true;
     });
     active_.erase(remaining, active_.end());
@@ -130,9 +135,14 @@ std::vector<Impact> DropScheduler::tick(double end_time, bool rain_enabled, floa
             next_rain_ = end_time + std::exponential_distribution<double>(rate)(random_);
             break;
         }
-        const float x = std::uniform_real_distribution<float>(0.0f, config_.grid.lx)(random_);
-        const float z = std::uniform_real_distribution<float>(0.0f, config_.grid.lz)(random_);
-        spawn(x, z, next_rain_, view);
+        const float cx = view.camera.position.x + config_.grid.lx / 2;
+        const float cz = view.camera.position.z + config_.grid.lz / 2;
+        const float margin = .5f * std::max(config_.grid.lx, config_.grid.lz);
+        const float x = std::uniform_real_distribution<float>(std::min(0.f, cx) - margin,
+            std::max(config_.grid.lx, cx) + margin)(random_);
+        const float z = std::uniform_real_distribution<float>(std::min(0.f, cz) - margin,
+            std::max(config_.grid.lz, cz) + margin)(random_);
+        add_drop(x, z, next_rain_, view);
         ++spawned;
         next_rain_ += std::exponential_distribution<double>(rate)(random_);
     }

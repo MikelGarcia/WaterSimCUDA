@@ -35,6 +35,8 @@ private:
     Config config_;
     Mesh basin_{};
     Mesh drop_{};
+    Mesh grass_{};
+    Shader grass_shader_{};
     Shader stone_shader_{};
     Shader water_shader_{};
     Shader sky_shader_{};

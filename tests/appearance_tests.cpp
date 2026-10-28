@@ -205,23 +205,21 @@ TEST_CASE("appearance", drop_mesh_obeys_spawn_bounds) {
     CHECK_NEAR(bottom, 0.0f, 0.00001f); CHECK_NEAR(top, 0.28f, 0.00001f);
     CHECK(lower_radius > 0.06f && upper_radius < 0.025f);
     const water::Grid grid{96, 64, 20, 12};
-    auto config = small_config();
-    config.grid = grid;
-    water::DropScheduler scheduler(config);
     for (float pitch : {0.15f, 0.72f, 1.45f})
     for (float yaw : {0.0f, 0.65f, 1.8f, 3.4f, 4.9f})
     for (float scale : {0.4f, 1.65f, 4.0f})
-    for (float aspect : {1.5f, 1.6f}) {
+    for (float aspect : {1.5f, 1.6f, 2.0f}) {
         const float distance = scale * 20;
         const Camera3D view{{distance*std::cos(pitch)*std::sin(yaw), distance*std::sin(pitch),
                              distance*std::cos(pitch)*std::cos(yaw)}, {0,0,0}, {0,1,0}, 42, CAMERA_PERSPECTIVE};
         const auto eye = view.position;
         const Vector3 forward{-eye.x/distance, -eye.y/distance, -eye.z/distance};
         const Vector3 up{-std::sin(pitch)*std::sin(yaw), std::cos(pitch), -std::sin(pitch)*std::cos(yaw)};
-        for (const Vector2 point : {Vector2{0,0}, {20,0}, {0,12}, {20,12}, {10,6}}) {
-            scheduler.reset();
-            CHECK(scheduler.spawn(point.x, point.y, 0, {view, aspect}));
-            const double height = scheduler.active().front().spawn_height;
+        for (const Vector2 point : {Vector2{std::min(0.f,eye.x+10)-10,std::min(0.f,eye.z+6)-10},
+                                   {std::max(20.f,eye.x+10)+10,std::min(0.f,eye.z+6)-10},
+                                   {std::min(0.f,eye.x+10)-10,std::max(12.f,eye.z+6)+10},
+                                   {std::max(20.f,eye.x+10)+10,std::max(12.f,eye.z+6)+10}, {10,6}}) {
+            const double height = water::drop_spawn_height(point.x, point.y, grid, {view, aspect});
             bool above = true, behind = true;
             for (int i = 0; i < mesh.vertexCount; ++i) {
                 const double x = point.x-10 + mesh.vertices[3*i]-eye.x;
@@ -680,12 +678,16 @@ TEST_CASE("appearance", target_resize_and_failure_release_resources) {
 TEST_CASE("appearance", constructor_failures_release_meshes_and_shaders) {
     Context context;
     for (const auto fault : {water::AppearanceFault::stone_shader, water::AppearanceFault::water_shader,
-                            water::AppearanceFault::basin_mesh}) {
+                            water::AppearanceFault::basin_mesh, water::AppearanceFault::grass_shader,
+                            water::AppearanceFault::grass_mesh}) {
         water::appearance_fault = fault;
         CHECK_THROWS(water::SceneRenderer(small_config()), std::runtime_error);
         const auto handles = water::appearance_handles;
         CHECK(!glIsProgram(handles.stone_shader));
         CHECK(!glIsProgram(handles.water_shader));
+        CHECK(!glIsProgram(handles.grass_shader));
+        CHECK(!glIsVertexArray(handles.grass_vertex_array));
+        CHECK(!glIsBuffer(handles.grass_positions) && !glIsBuffer(handles.grass_normals));
         CHECK(!glIsVertexArray(handles.vertex_array));
         CHECK(!glIsBuffer(handles.positions));
         CHECK(!glIsBuffer(handles.normals));
@@ -762,9 +764,12 @@ TEST_CASE("appearance", capture_and_main_projection_align_at_drawable_sizes) {
         CHECK(std::abs(int(stone_pixel.color[0]) - int(stone_pixel.color[2])) < 20);
         const auto background = sample(screen, 5, GetRenderHeight() - 6);
         const auto ray = GetScreenToWorldRay({5.5f, 5.5f}, camera);
-        SkyProbe probe;
-        const auto expected_sky = probe.read(ray.direction, 0);
-        for (int c = 0; c < 3; ++c) CHECK_NEAR(int(background.color[c]), int(expected_sky.color[c]), 2);
+        CHECK(ray.direction.y < 0);
+        const float distance = -ray.position.y / ray.direction.y;
+        const Vector3 ground{ray.position.x + distance * ray.direction.x, 0,
+                              ray.position.z + distance * ray.direction.z};
+        CHECK(background.color[1] > background.color[0] * 1.4f);
+        CHECK_NEAR(background.depth, expected_depth(ground), .00002f);
         DrawRectangle(0, 0, 20, 20, MAGENTA);
         rlDrawRenderBatchActive();
         unsigned char ui[4]{};
@@ -970,4 +975,57 @@ TEST_CASE("appearance", live_depth_replaces_only_basin_and_retains_old_geometry_
         EndDrawing();
     }
     CHECK(glGetError() == GL_NO_ERROR);
+}
+
+TEST_CASE("appearance", grass_surrounds_coping_without_covering_pool_or_capture) {
+    Context context;
+    const auto config = small_config();
+    water::Simulation simulation(config);
+    water::WaterRenderer renderer(config.grid);
+    renderer.update(simulation);
+    water::SceneRenderer scene(config);
+    CHECK(scene.resize(840, 560));
+    BeginDrawing();
+    scene.draw(camera, renderer, {}, 0, 0);
+    RenderTexture2D screen{};
+    screen.texture.width = 840;
+    screen.texture.height = 560;
+    const Vector3 point{3, 0, 0};
+    const auto grass = sample_world(screen, point);
+    CHECK(grass.color[1] > grass.color[0] * 1.4f);
+    CHECK_NEAR(grass.depth, expected_depth(point), .00002f);
+    const Vector3 buried_wall{0, -.5f, 3.18f};
+    const auto occluded = sample_world(screen, buried_wall);
+    CHECK(occluded.color[1] > occluded.color[0] * 1.4f);
+    CHECK(occluded.depth < expected_depth(buried_wall) - .00002f);
+    const auto captured = sample_world(water::SceneValidation::target(scene), point);
+    CHECK(captured.color[3] == 0 && captured.depth == 1);
+    EndDrawing();
+}
+
+TEST_CASE("appearance", grass_mesh_has_upward_winding_and_exact_coping_hole) {
+    Context context;
+    const auto config = small_config();
+    water::SceneRenderer scene(config);
+    const auto& mesh = water::SceneValidation::grass_mesh(scene);
+    CHECK(mesh.vertexCount == 24 && mesh.triangleCount == 8 && mesh.vaoId);
+    const float hx = config.grid.lx / 2 + .18f, hz = config.grid.lz / 2 + .18f;
+    const float outer = float(rlGetCullDistanceFar()) + 4 * std::max(config.grid.lx, config.grid.lz);
+    for (int i = 0; i < mesh.vertexCount; i += 3) {
+        bool left = true, right = true, front = true, back = true;
+        for (int j = 0; j < 3; ++j) {
+            const int n = 3 * (i + j);
+            const float x = mesh.vertices[n], z = mesh.vertices[n + 2];
+            CHECK(mesh.vertices[n + 1] == 0);
+            CHECK(mesh.normals[n] == 0 && mesh.normals[n + 1] == 1 && mesh.normals[n + 2] == 0);
+            CHECK(std::abs(x) <= outer && std::abs(z) <= outer);
+            left &= x <= -hx; right &= x >= hx;
+            front &= z <= -hz; back &= z >= hz;
+        }
+        CHECK(left || right || front || back);
+        const float* a = mesh.vertices + 3 * i;
+        const float* b = a + 3;
+        const float* c = a + 6;
+        CHECK((b[2]-a[2])*(c[0]-a[0]) - (b[0]-a[0])*(c[2]-a[2]) > 0);
+    }
 }

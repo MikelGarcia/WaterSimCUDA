@@ -186,6 +186,44 @@ SceneRenderer::SceneRenderer(const Config& config) : config_(config) {
         required_uniform(stone_shader_, "mvp", "basin.vs");
         required_uniform(water_shader_, "mvp", "water.vs");
         basin_ = build_basin(config);
+        grass_shader_ = load_shader("basin.vs", "grass.fs");
+#ifdef WATER_APPEARANCE_VALIDATION
+        appearance_handles.grass_shader = grass_shader_.id;
+#endif
+        SCENE_CHECKPOINT(grass_shader);
+        const float hx = config.grid.lx / 2 + .18f, hz = config.grid.lz / 2 + .18f;
+        const float outer = static_cast<float>(rlGetCullDistanceFar()) + 4 * std::max(config.grid.lx, config.grid.lz);
+        const float rectangles[][4] = {{-outer,-outer,-hx,outer}, {hx,-outer,outer,outer},
+                                       {-hx,-outer,hx,-hz}, {-hx,hz,hx,outer}};
+        grass_.vertexCount = 24;
+        grass_.triangleCount = 8;
+        const unsigned grass_bytes = grass_.vertexCount * 3 * sizeof(float);
+        grass_.vertices = static_cast<float*>(MemAlloc(grass_bytes));
+        grass_.normals = static_cast<float*>(MemAlloc(grass_bytes));
+        if (!grass_.vertices || !grass_.normals) throw std::bad_alloc();
+        int ground_vertex = 0;
+        for (const auto& r : rectangles) {
+            const Vector3 points[] = {{r[0],0,r[1]}, {r[0],0,r[3]}, {r[2],0,r[3]},
+                                       {r[0],0,r[1]}, {r[2],0,r[3]}, {r[2],0,r[1]}};
+            for (const auto p : points) {
+                grass_.vertices[ground_vertex] = p.x;
+                grass_.vertices[ground_vertex+1] = 0;
+                grass_.vertices[ground_vertex+2] = p.z;
+                grass_.normals[ground_vertex] = 0;
+                grass_.normals[ground_vertex+1] = 1;
+                grass_.normals[ground_vertex+2] = 0;
+                ground_vertex += 3;
+            }
+        }
+        UploadMesh(&grass_, false);
+        if (!grass_.vaoId || glGetError() != GL_NO_ERROR)
+            throw std::runtime_error("could not upload grass mesh");
+#ifdef WATER_APPEARANCE_VALIDATION
+        appearance_handles.grass_vertex_array = grass_.vaoId;
+        appearance_handles.grass_positions = grass_.vboId[0];
+        appearance_handles.grass_normals = grass_.vboId[2];
+#endif
+        SCENE_CHECKPOINT(grass_mesh);
 
         constexpr int rings = 24, segments = 24;
         drop_.triangleCount = 2 * segments * (rings - 1);
@@ -395,6 +433,13 @@ void SceneRenderer::draw(const Camera3D& camera, const WaterRenderer& water,
     begin_3d(camera);
     view_ = rlGetMatrixModelview();
     projection_ = rlGetMatrixProjection();
+    MaterialMap ground_maps[MAX_MATERIAL_MAPS]{};
+    ground_maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    ground_maps[MATERIAL_MAP_DIFFUSE].texture.id = rlGetTextureIdDefault();
+    Material ground{};
+    ground.shader = grass_shader_;
+    ground.maps = ground_maps;
+    DrawMesh(grass_, ground, identity);
     draw_basin(false);
     const Vector2 size{static_cast<float>(capture_.texture.width), static_cast<float>(capture_.texture.height)};
     const Vector2 planes{static_cast<float>(rlGetCullDistanceNear()), static_cast<float>(rlGetCullDistanceFar())};
@@ -438,6 +483,8 @@ void SceneRenderer::release() noexcept {
     unload_target(capture_);
     UnloadMesh(basin_);
     UnloadMesh(drop_);
+    UnloadMesh(grass_);
+    if (grass_shader_.id) UnloadShader(grass_shader_);
     if (stone_shader_.id) UnloadShader(stone_shader_);
     if (water_shader_.id) UnloadShader(water_shader_);
     if (sky_shader_.id) UnloadShader(sky_shader_);
@@ -445,6 +492,8 @@ void SceneRenderer::release() noexcept {
     capture_ = {};
     basin_ = {};
     drop_ = {};
+    grass_ = {};
+    grass_shader_ = {};
     stone_shader_ = {};
     water_shader_ = {};
     sky_shader_ = {};

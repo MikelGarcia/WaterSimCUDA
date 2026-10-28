@@ -222,3 +222,17 @@ TEST_CASE("controller", paused_depth_change_preserves_state_and_flights_then_adv
     app.reset();
     CHECK(simulation.config().depth == 100 && app.sim_time() == 0);
 }
+
+TEST_CASE("controller", exterior_automatic_arrival_leaves_entire_water_state_zero) {
+    const auto config = fixture();
+    water::Simulation simulation(config);
+    water::AppController app(simulation, config);
+    while (app.drops().empty()) app.frame(1.0/120, false, true, 60, .01f, .15f, view());
+    CHECK(app.drops().size() == 1);
+    const auto drop = app.drops()[0];
+    CHECK(drop.x < 0 || drop.x > 20 || drop.z < 0 || drop.z > 12);
+    advance(app, int(std::ceil((drop.arrival-app.sim_time())*120))+1);
+    CHECK(app.drops().empty());
+    const auto state = water::download(simulation);
+    CHECK(zero(state.eta) && zero(state.u) && zero(state.v));
+}
