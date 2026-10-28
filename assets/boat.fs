@@ -17,4 +17,3 @@ void main() {
     float specular = pow(max(dot(n,halfway),0.0),48.0) * 0.22;
     finalColor = vec4(color.rgb * diffuse + specular,color.a);
 }
-
