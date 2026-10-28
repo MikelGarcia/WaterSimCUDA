@@ -861,6 +861,24 @@ TEST_CASE("appearance", controller_pause_resume_and_reset_preserve_scene_clock) 
     app.frame(30, true, true, 8, 0.01f, 0.15f, view);
     CHECK(app.sim_time() == 1);
     CHECK(capture("appearance-captures/clock-paused.png") == running);
+    std::filesystem::create_directories("pool-captures");
+    const auto flights = app.drops();
+    for (float depth : {.25f, 6.f}) {
+        app.set_depth(depth);
+        scene.set_depth(depth);
+        CHECK(app.sim_time() == 1 && app.drops().size() == flights.size());
+        for (std::size_t i = 0; i < flights.size(); ++i) {
+            CHECK(app.drops()[i].spawn_height == flights[i].spawn_height);
+            CHECK(app.drops()[i].arrival == flights[i].arrival);
+            CHECK(app.drops()[i].x == flights[i].x && app.drops()[i].z == flights[i].z);
+        }
+        const auto path = depth == .25f ? "pool-captures/paused-h025.png" : "pool-captures/paused-h6.png";
+        const auto changed = capture(path);
+        app.frame(30, true, true, 8, std::min(.01f, .02f * depth), .15f, view);
+        CHECK(capture(path) == changed);
+    }
+    app.set_depth(config.depth);
+    scene.set_depth(config.depth);
     app.frame(water::FixedClock::quantum, false, true, 8, 0.01f, 0.15f, view);
     CHECK_NEAR(app.sim_time(), 1 + water::FixedClock::quantum, 1e-12);
     CHECK(capture("appearance-captures/clock-resumed.png") != running);
@@ -880,6 +898,7 @@ TEST_CASE("appearance", rendered_acceptance_matrix) {
         int nx, ny, width, height;
         float time, mix, pitch, zoom, yaw;
         bool impacted;
+        float depth = 3;
     };
     const Scenario scenarios[]{
         {"default-t0-r0", 512,512,1280,800, 0,0,0.72f,1.65f,0.65f,false},
@@ -888,18 +907,20 @@ TEST_CASE("appearance", rendered_acceptance_matrix) {
         {"default-t30-r0",512,512,1280,800,30,0,0.72f,1.65f,0.65f,true},
         {"default-t30-r05",512,512,1280,800,30,.5f,0.72f,1.65f,0.65f,true},
         {"default-t30-r1",512,512,1280,800,30,1,0.72f,1.65f,0.65f,true},
-        {"wide-low-near",96,64,840,560,30,.5f,0.15f,0.4f,1.8f,true},
-        {"wide-high-far",96,64,840,560,0,0,1.45f,4,3.4f,false},
-        {"tall-high-near",64,96,840,560,30,1,1.45f,0.4f,4.9f,true},
-        {"tall-low-far",64,96,1280,800,0,.5f,0.15f,4,0,false},
-        {"sun-visible",96,64,1280,800,0,1,1.09f,1.65f,0.719f,false},
-        {"sun-clouded",96,64,1280,800,389,1,1.09f,1.65f,0.719f,false}
+        {"wide-low-near-h025",96,64,840,560,30,.5f,0.15f,0.4f,1.8f,true,.25f},
+        {"wide-high-far-h6",96,64,840,560,0,0,1.45f,4,3.4f,false,6},
+        {"tall-high-near-h6",64,96,840,560,30,1,1.45f,0.4f,4.9f,true,6},
+        {"tall-low-far-h025",64,96,1280,800,0,.5f,0.15f,4,0,false,.25f},
+        {"floor-h6",96,64,1280,800,0,0,1.09f,1.65f,0.719f,false,6},
+        {"floor-h025",64,96,840,560,0,0,1.09f,1.65f,0.719f,false,.25f}
     };
-    std::filesystem::create_directories("appearance-captures");
+    std::filesystem::create_directories("pool-captures");
     for (const auto& scenario : scenarios) {
         SetWindowSize(scenario.width, scenario.height);
         CHECK(GetScreenWidth() == scenario.width && GetScreenHeight() == scenario.height);
         water::Config config;
+        config.depth = scenario.depth;
+        config.impact_strength = std::min(config.impact_strength, .02f * config.depth);
         config.grid.nx = scenario.nx; config.grid.ny = scenario.ny;
         if (scenario.nx != 512) config.impact_radius = 0.75f;
         water::Simulation simulation(config);
@@ -915,14 +936,14 @@ TEST_CASE("appearance", rendered_acceptance_matrix) {
             const water::SpawnView spawn_view{view, float(scenario.width)/scenario.height};
             CHECK(app.spawn(10, 6, spawn_view));
             for (int tick = 0; tick < int(scenario.time * 120); ++tick)
-                app.frame(water::FixedClock::quantum, false, true, 8, 0.01f, 0.15f, spawn_view);
+                app.frame(water::FixedClock::quantum, false, true, 8, config.impact_strength, 0.15f, spawn_view);
             CHECK_NEAR(app.sim_time(), scenario.time, 1e-10);
         }
         water.update(simulation);
         BeginDrawing();
         scene.draw(view, water, app.drops(), scenario.time, scenario.mix);
         const auto image = LoadImageFromScreen();
-        const auto path = std::string("appearance-captures/") + scenario.name + ".png";
+        const auto path = std::string("pool-captures/") + scenario.name + ".png";
         CHECK(image.width == scenario.width && image.height == scenario.height);
         CHECK(ExportImage(image, path.c_str()));
         UnloadImage(image);
@@ -1028,4 +1049,29 @@ TEST_CASE("appearance", grass_mesh_has_upward_winding_and_exact_coping_hole) {
         const float* c = a + 6;
         CHECK((b[2]-a[2])*(c[0]-a[0]) - (b[0]-a[0])*(c[2]-a[2]) > 0);
     }
+}
+
+TEST_CASE("appearance", deep_floor_capture_remains_visible_at_drawable_scales) {
+    Context context;
+    auto config = small_config();
+    const Camera3D overhead{{0, 12, 0}, {0, 0, 0}, {0, 0, -1}, 45, CAMERA_PERSPECTIVE};
+    for (float depth : {.25f, 3.f, 6.f}) {
+        config.depth = depth;
+        config.impact_strength = std::min(config.impact_strength, .02f * depth);
+        water::SceneRenderer scene(config);
+        for (const auto size : {std::array<int, 2>{840, 560}, {1260, 840}}) {
+            CHECK(scene.resize(size[0], size[1]));
+            BeginDrawing();
+            water::SceneValidation::capture(scene, overhead);
+            const auto target = water::SceneValidation::target(scene);
+            const Vector3 point{0, -depth, 0};
+            const auto floor = sample_world(target, point, overhead);
+            CHECK(floor.color[3] == 255 && floor.color[0] > 35);
+            CHECK_NEAR(floor.depth, expected_depth(point, overhead), .000002f);
+            const auto outside = sample_world(target, {3, 0, 0}, overhead);
+            CHECK(outside.color[3] == 0 && outside.depth == 1);
+            EndDrawing();
+        }
+    }
+    CHECK(glGetError() == GL_NO_ERROR);
 }

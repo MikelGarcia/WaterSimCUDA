@@ -19,15 +19,18 @@ Keep the generated `assets` directory beside the executable. Launching from anot
 | Left click on water | Drop at the selected point |
 | Right drag / wheel | Orbit / zoom, including while paused |
 | Space | Pause or resume water, drops, and clouds |
-| R | Clear water, drops, and simulation time; restart seeded rain and retain the mix |
+| R | Clear water, drops, and simulation time; restart seeded rain and retain the selected depth, mix and other interactive settings |
 | T | Toggle rain |
 | Up / Down | Rain rate ±1 drop/s, clamped to 0–60 |
 | Left / Right | Impact strength ±0.001 m, clamped to 0–0.02 × depth |
 | [ / ] | Damping ±0.05/s, clamped to 0–5/s |
 | , / . | Reflection weight −/+0.05, clamped to 0–1 |
+| ( / ) | Decrease / increase physical depth by 0.25 m; interactive minimum 0.25 m |
 | Escape | Close |
 
-`water_demo --help` lists startup options with units and defaults. The default grid is 512 × 512 in a 20 m × 12 m basin, depth 1 m, damping 0.15/s, impact radius 0.35 m, strength 0.01 m, rain 8/s, seed 1. `--reflection` defaults to 0.5: equal reflected sky and refracted stone. Zero selects only refraction, one selects only reflection. Grid sizes are 8–2048 per axis. Radius must span at least two cell widths and stay below one quarter of the shorter basin dimension. Startup damping accepts any finite nonnegative value; bracket controls use the range above.
+`water_demo --help` lists startup options with units and defaults. The default grid is 512 × 512 in a 20 m × 12 m basin, depth 3 m, damping 0.15/s, impact radius 0.35 m, strength 0.01 m, rain 8/s, seed 1. `--reflection` defaults to 0.5: equal reflected sky and refracted stone. Zero selects only refraction, one selects only reflection. Grid sizes are 8–2048 per axis. Radius must span at least two cell widths and stay below one quarter of the shorter basin dimension. Startup damping accepts any finite nonnegative value; bracket controls use the range above.
+
+Rain samples a finite camera-local region covering the pool and nearby ground. The total 0–60 drops/s rate is shared across both: water arrivals create ripples, while grass arrivals disappear at ground level without waves, wet grass or splashes. Active flights keep their positions, spawn heights and arrival times when depth changes. Changing depth updates wave speed without clearing water state; lowering it also clamps impact strength to 0.02 × depth. Startup `--depth` accepts any finite positive depth that satisfies the other configuration limits, including values below the interactive minimum.
 
 The overlay uses fixed status columns and reports render FPS plus the mean completed CUDA simulation duration over the trailing second, refreshed at most once per second and held between updates. An empty timing window displays zero at the next refresh. Timing queries do not wait for unfinished samples. A stalled frame advances at most eight 1/120 s quanta; simulated time slows under overload. There is no CPU water fallback.
 
