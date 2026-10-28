@@ -14,6 +14,20 @@ void check(cudaError_t error, const char* operation) {
 
 } // namespace
 
+BoatState download_boat(const Simulation& simulation) {
+    BoatState state;
+    check(cudaMemcpyAsync(&state, simulation.boat_, sizeof(state), cudaMemcpyDeviceToHost,
+                          simulation.stream_), "download boat");
+    check(cudaStreamSynchronize(simulation.stream_), "synchronize boat download");
+    return state;
+}
+
+void upload_boat(Simulation& simulation, const BoatState& state) {
+    check(cudaMemcpyAsync(simulation.boat_, &state, sizeof(state), cudaMemcpyHostToDevice,
+                          simulation.stream_), "upload boat");
+    check(cudaStreamSynchronize(simulation.stream_), "synchronize boat upload");
+}
+
 Snapshot download(const Simulation& simulation) {
     const auto& g = simulation.config_.grid;
     Snapshot state{std::vector<float>(g.nx * g.ny),

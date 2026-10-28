@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config.hpp"
+#include "boat.hpp"
 #include <cuda_runtime_api.h>
 #include <cstddef>
 
@@ -25,13 +26,16 @@ public:
     Simulation& operator=(const Simulation&) = delete;
 
     void reset();
-    void step(float dt, float damping);
+    void step(float dt, float damping, BoatControl control = {});
+    void write_boat_transform(float* device_column_major, std::size_t float_count);
     void apply_impacts(const Impact* host_events, std::size_t count);
     void write_surface(Vertex* device_positions, Vertex* device_normals, std::size_t vertex_count);
     cudaStream_t stream() const { return stream_; }
     const Config& config() const { return config_; }
 
 private:
+    friend BoatState download_boat(const Simulation& simulation);
+    friend void upload_boat(Simulation& simulation, const BoatState& state);
     friend Snapshot download(const Simulation& simulation);
     friend void upload(Simulation& simulation, const Snapshot& state);
     void release() noexcept;
@@ -43,6 +47,7 @@ private:
     float* u_ = nullptr;
     float* v_ = nullptr;
     double2* impact_sums_ = nullptr;
+    BoatState* boat_ = nullptr;
 };
 
 } // namespace water

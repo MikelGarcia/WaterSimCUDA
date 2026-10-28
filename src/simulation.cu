@@ -23,6 +23,124 @@ void check_cleanup(cudaError_t error, const char* operation) noexcept {
 
 constexpr int max_impacts = 64;
 
+__global__ void reset_boat(BoatState* boat, float lx, float lz) {
+    *boat = {lx / 2, lz / 2, lx >= lz ? 0.0f : 1.57079632679f, 0, 0, 0};
+}
+
+__device__ float driven_speed(float speed, float throttle, float dt) {
+    constexpr float drag = 0.35f;
+    if (speed * throttle < 0) {
+        const float stop_time = log1pf(drag * fabsf(speed) / 1.5f) / drag;
+        if (dt < stop_time) {
+            return copysignf((fabsf(speed) + 1.5f / drag) * expf(-drag * dt) -
+                             1.5f / drag, speed);
+        }
+        dt -= stop_time;
+        speed = 0;
+    }
+    const float acceleration = throttle * (throttle >= 0 ? 0.75f : 0.50f);
+    const float decay = expf(-drag * dt);
+    const float next = speed * decay + acceleration * (-expm1f(-drag * dt)) / drag;
+    // A reverse propulsion cap must not delete a pre-existing rebound impulse.
+    if (throttle < 0) return fmaxf(next, fminf(speed, -0.75f));
+    return next;
+}
+
+__device__ void footprint(float yaw, float& ex, float& ez) {
+    const float c = fabsf(cosf(yaw)), s = fabsf(sinf(yaw));
+    ex = 0.5f * (boat_geometry.length * c + boat_geometry.beam * s);
+    ez = 0.5f * (boat_geometry.length * s + boat_geometry.beam * c);
+}
+
+__global__ void update_boat(BoatState* boat, BoatControl control, float dt, float lx, float lz) {
+    BoatState b = *boat;
+    const float radius = 0.5f * hypotf(boat_geometry.length, boat_geometry.beam);
+    const float travel_limit = fminf(boat_geometry.length, boat_geometry.beam) / 8;
+    const float corner_speed = hypotf(b.vx, b.vz) + 0.75f * dt +
+                               radius * fmaxf(2.0f, fabsf(b.yaw_rate));
+    const float safe_dt = fminf(1.0f / 240, fminf(travel_limit / corner_speed,
+                               0.034906585f / fmaxf(2.0f, fabsf(b.yaw_rate))));
+    const float consumed = fminf(dt, 256 * safe_dt);
+    const int count = min(256, max(1, static_cast<int>(ceilf(consumed / safe_dt))));
+    const float h = consumed / count;
+    const float initial_speed = hypotf(b.vx, b.vz);
+    if (initial_speed > 1.5f) {
+        b.vx *= 1.5f / initial_speed;
+        b.vz *= 1.5f / initial_speed;
+    }
+    b.yaw_rate = fminf(2.0f, fmaxf(-2.0f, b.yaw_rate));
+    int previous_contact = 0;
+    int previous_translation_contact = 0;
+    for (int i = 0; i < count; ++i) {
+        const float c = cosf(b.yaw), s = sinf(b.yaw);
+        const float longitudinal = b.vx * c + b.vz * s;
+        const float lateral = -b.vx * s + b.vz * c;
+        const float forward = driven_speed(longitudinal, control.throttle, h);
+        const float sideways = lateral * expf(-4.0f * h);
+        float vx = forward * c - sideways * s;
+        float vz = forward * s + sideways * c;
+        const float magnitude = hypotf(vx, vz);
+        if (magnitude > 1.5f) {
+            vx *= 1.5f / magnitude;
+            vz *= 1.5f / magnitude;
+        }
+        const float mid_speed = 0.5f * (longitudinal + forward);
+        const float ratio = mid_speed / 1.5f;
+        const float target = control.rudder * 2.5f * mid_speed / (1 + 3 * ratio * ratio);
+        float rate = target + (b.yaw_rate - target) * expf(-8 * h);
+        rate = fminf(2.0f, fmaxf(-2.0f, rate));
+        float yaw = b.yaw + target * h + (b.yaw_rate - target) * (-expm1f(-8 * h)) / 8;
+        if (magnitude < 1e-4f) {
+            rate = 0;
+            yaw = b.yaw;
+        }
+        float x = b.x + 0.5f * (b.vx + vx) * h;
+        float z = b.z + 0.5f * (b.vz + vz) * h;
+        float ex, ez;
+        footprint(yaw, ex, ez);
+        int contact = 0;
+        // Reject rotation that would sweep the footprint through a wall at this pose.
+        if (b.x < ex || b.x > lx - ex || b.z < ez || b.z > lz - ez) {
+            if (b.x < ex) contact |= 1;
+            if (b.x > lx - ex) contact |= 2;
+            if (b.z < ez) contact |= 4;
+            if (b.z > lz - ez) contact |= 8;
+            yaw = b.yaw;
+            footprint(yaw, ex, ez);
+        }
+        int translation_contact = 0;
+        if (x < ex) translation_contact |= 1;
+        if (x > lx - ex) translation_contact |= 2;
+        if (z < ez) translation_contact |= 4;
+        if (z > lz - ez) translation_contact |= 8;
+        contact |= translation_contact;
+        x = fminf(lx - ex, fmaxf(ex, x));
+        z = fminf(lz - ez, fmaxf(ez, z));
+        if (((translation_contact & 1) && vx < 0) ||
+            ((translation_contact & 2) && vx > 0)) vx *= -0.10f;
+        if (((translation_contact & 4) && vz < 0) ||
+            ((translation_contact & 8) && vz > 0)) vz *= -0.10f;
+        if (translation_contact & ~previous_translation_contact) {
+            // A rejected turn alone must not drain motion parallel to the wall.
+            if (!(translation_contact & 3)) vx *= 0.25f;
+            if (!(translation_contact & 12)) vz *= 0.25f;
+        }
+        if (contact & ~previous_contact) rate *= 0.20f;
+        previous_contact = contact;
+        previous_translation_contact = translation_contact;
+        b = {x, z, yaw, vx, vz, rate};
+    }
+    *boat = b;
+}
+
+__global__ void boat_transform(const BoatState* boat, float* matrix, float lx, float lz) {
+    const BoatState b = *boat;
+    const float c = cosf(b.yaw), s = sinf(b.yaw);
+    const float values[16] = {c, 0, s, 0, 0, 1, 0, 0, -s, 0, c, 0,
+                              b.x - lx / 2, 0, b.z - lz / 2, 1};
+    for (int i = 0; i < 16; ++i) matrix[i] = values[i];
+}
+
 struct ImpactBatch {
     Impact events[max_impacts];
     int count;
@@ -156,12 +274,20 @@ __global__ void build_surface(const float* eta, Vertex* positions, Vertex* norma
 
 Simulation::Simulation(const Config& config) : config_(config), max_dt_(stable_dt(config)) {
     const auto& g = config_.grid;
+    const float required_length = boat_geometry.length + 2 * boat_geometry.spawn_clearance;
+    const float required_beam = boat_geometry.beam + 2 * boat_geometry.spawn_clearance;
+    if (std::max(g.lx, g.lz) < required_length || std::min(g.lx, g.lz) < required_beam) {
+        throw std::invalid_argument("boat footprint does not fit: required basin dimensions at least " +
+            std::to_string(required_length) + " m along spawn heading and " +
+            std::to_string(required_beam) + " m across it (including clearance)");
+    }
     try {
         check(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking), "create simulation stream");
         check(cudaMalloc(&eta_, sizeof(float) * g.nx * g.ny), "allocate heights");
         check(cudaMalloc(&u_, sizeof(float) * (g.nx + 1) * g.ny), "allocate x velocities");
         check(cudaMalloc(&v_, sizeof(float) * g.nx * (g.ny + 1)), "allocate z velocities");
         check(cudaMalloc(&impact_sums_, sizeof(double2) * max_impacts), "allocate impact sums");
+        check(cudaMalloc(&boat_, sizeof(BoatState)), "allocate boat");
         reset();
     } catch (...) {
         release();
@@ -220,6 +346,7 @@ void Simulation::apply_impacts(const Impact* host_events, std::size_t count) {
 }
 
 void Simulation::release() noexcept {
+    if (boat_) check_cleanup(cudaFree(boat_), "free boat");
     if (eta_) check_cleanup(cudaFree(eta_), "free heights");
     if (u_) check_cleanup(cudaFree(u_), "free x velocities");
     if (v_) check_cleanup(cudaFree(v_), "free z velocities");
@@ -239,19 +366,36 @@ void Simulation::set_depth(float depth) {
 
 void Simulation::reset() {
     const auto& g = config_.grid;
+    reset_boat<<<1, 1, 0, stream_>>>(boat_, g.lx, g.lz);
+    check(cudaGetLastError(), "reset boat");
     check(cudaMemsetAsync(eta_, 0, sizeof(float) * g.nx * g.ny, stream_), "reset heights");
     check(cudaMemsetAsync(u_, 0, sizeof(float) * (g.nx + 1) * g.ny, stream_), "reset x velocities");
     check(cudaMemsetAsync(v_, 0, sizeof(float) * g.nx * (g.ny + 1), stream_), "reset z velocities");
 }
 
-void Simulation::step(float dt, float damping) {
+void Simulation::write_boat_transform(float* device_column_major, std::size_t float_count) {
+    if (!device_column_major || float_count != 16) {
+        throw std::invalid_argument("boat transform requires exactly 16 device floats");
+    }
+    const auto& g = config_.grid;
+    boat_transform<<<1, 1, 0, stream_>>>(boat_, device_column_major, g.lx, g.lz);
+    check(cudaGetLastError(), "launch boat transform");
+}
+
+void Simulation::step(float dt, float damping, BoatControl control) {
     if (!std::isfinite(dt) || dt <= 0.0f || dt > max_dt_) {
         throw std::invalid_argument("step dt must be finite, positive, and within the current CFL bound");
     }
     if (!std::isfinite(damping) || damping < 0.0f) {
         throw std::invalid_argument("step damping must be finite and nonnegative");
     }
+    if (!std::isfinite(control.throttle) || !std::isfinite(control.rudder) ||
+        std::abs(control.throttle) > 1 || std::abs(control.rudder) > 1) {
+        throw std::invalid_argument("boat controls must be finite and in [-1, 1]");
+    }
     const auto& g = config_.grid;
+    update_boat<<<1, 1, 0, stream_>>>(boat_, control, dt, g.lx, g.lz);
+    check(cudaGetLastError(), "launch boat update");
     constexpr int threads = 256;
     const int faces = std::max((g.nx + 1) * g.ny, g.nx * (g.ny + 1));
     const float dx = g.lx / g.nx;

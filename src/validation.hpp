@@ -11,5 +11,7 @@ struct Snapshot {
 
 Snapshot download(const Simulation& simulation);
 void upload(Simulation& simulation, const Snapshot& state);
+BoatState download_boat(const Simulation& simulation);
+void upload_boat(Simulation& simulation, const BoatState& state);
 
 } // namespace water
