@@ -190,7 +190,10 @@ void demo(const water::Config& config) {
         }
         timer.begin(simulation.stream());
         const double old_time = app.sim_time();
-        app.frame(elapsed, paused, rain, rate, strength, damping, spawn_view);
+        const water::BoatControl control{
+            float(IsKeyDown(KEY_W) - IsKeyDown(KEY_S)),
+            float(IsKeyDown(KEY_D) - IsKeyDown(KEY_A))};
+        app.frame(elapsed, paused, rain, rate, strength, damping, spawn_view, control);
         timer.end(simulation.stream(), app.sim_time() != old_time);
         renderer.update(simulation);
 
@@ -212,6 +215,7 @@ void demo(const water::Config& config) {
                  36, 88, 16, Color{65, 83, 93, 255});
         DrawText(TextFormat("Reflection %3.0f%%", 100 * reflection), 36, 114, 16, status_color);
         DrawText(TextFormat("/ Refraction %3.0f%%", 100 * (1 - reflection)), 208, 114, 16, status_color);
+        DrawText("W/S: forward/reverse   A/D: rudder", 430, 114, 16, status_color);
         DrawText(TextFormat("Depth %.2f m   (/): depth", simulation.config().depth),
                  36, 140, 16, status_color);
         DrawText("Up/Down: rain   Left/Right: strength   [/]: damping   +/-: reflection   Esc: close",
@@ -249,6 +253,7 @@ void help() {
               "Space pause | R reset | T rain | arrows up/down rain, left/right strength\n"
               "[ / ] damping | + / - reflection/refraction mix (+/- 0.05)\n"
               "( / ) depth (-/+ 0.25 m, minimum 0.25 m)\n"
+              "W / S forward/reverse (brake before reversing) | A / D rudder\n"
               "left click drop | right drag orbit | wheel zoom | Esc close");
 }
 }

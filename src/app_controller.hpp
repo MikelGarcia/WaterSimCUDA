@@ -10,7 +10,7 @@ public:
     void set_depth(float depth);
     AppController(Simulation& simulation, const Config& config);
     void frame(double wall_seconds, bool paused, bool rain_enabled, float rate,
-               float strength, float damping, const SpawnView&);
+               float strength, float damping, const SpawnView&, BoatControl control = {});
     void reset();
     bool spawn(float x, float z, const SpawnView&);
     const std::vector<Drop>& drops() const { return scheduler_.active(); }

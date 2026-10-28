@@ -6,8 +6,9 @@ endif()
 execute_process(COMMAND "${DEMO}" --help OUTPUT_VARIABLE help RESULT_VARIABLE result)
 if(NOT result EQUAL 0 OR NOT help MATCHES "--reflection" OR NOT help MATCHES "reflection.*refraction"
    OR NOT help MATCHES "--reflection 0.7"
-   OR NOT help MATCHES "[+] / - reflection/refraction")
-    message(FATAL_ERROR "Desktop demo help does not explain reflection/refraction controls:\n${help}")
+   OR NOT help MATCHES "[+] / - reflection/refraction"
+   OR NOT help MATCHES "W / S forward/reverse" OR NOT help MATCHES "A / D rudder")
+    message(FATAL_ERROR "Desktop demo help does not explain appearance and boat controls:\n${help}")
 endif()
 foreach(mix IN ITEMS 0 1)
     set(capture "${SMOKE_DIR}/captures/water-${mix}.png")

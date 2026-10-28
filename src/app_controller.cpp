@@ -8,7 +8,7 @@ AppController::AppController(Simulation& simulation, const Config& config)
       dt_(static_cast<float>(FixedClock::quantum / substeps_)) {}
 
 void AppController::frame(double wall_seconds, bool paused, bool rain_enabled, float rate,
-                          float strength, float damping, const SpawnView& view) {
+                          float strength, float damping, const SpawnView& view, BoatControl control) {
     const int quanta = clock_.advance(wall_seconds, paused);
     for (int tick = 0; tick < quanta; ++tick) {
         const auto impacts = scheduler_.tick((ticks_ + 1) * FixedClock::quantum,
@@ -17,7 +17,7 @@ void AppController::frame(double wall_seconds, bool paused, bool rain_enabled, f
             simulation_.apply_impacts(impacts.data() + first,
                                      std::min<std::size_t>(64, impacts.size() - first));
         }
-        for (int i = 0; i < substeps_; ++i) simulation_.step(dt_, damping);
+        for (int i = 0; i < substeps_; ++i) simulation_.step(dt_, damping, control);
         ++ticks_;
     }
 }

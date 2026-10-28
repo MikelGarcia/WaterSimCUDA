@@ -27,6 +27,114 @@ void advance(water::AppController& app, int quanta) {
 bool zero(const std::vector<float>& values) {
     return std::all_of(values.begin(), values.end(), [](float x) { return x == 0; });
 }
+
+void same_boat(const water::BoatState& a, const water::BoatState& b, float tolerance = 1e-6f) {
+    CHECK_NEAR(a.x, b.x, tolerance);
+    CHECK_NEAR(a.z, b.z, tolerance);
+    CHECK_NEAR(a.yaw, b.yaw, tolerance);
+    CHECK_NEAR(a.vx, b.vx, tolerance);
+    CHECK_NEAR(a.vz, b.vz, tolerance);
+    CHECK_NEAR(a.yaw_rate, b.yaw_rate, tolerance);
+}
+
+void same_water(const water::Snapshot& a, const water::Snapshot& b) {
+    for (const auto pair : {std::make_pair(&a.eta, &b.eta),
+                            std::make_pair(&a.u, &b.u), std::make_pair(&a.v, &b.v)})
+        for (std::size_t i = 0; i < pair.first->size(); ++i)
+            CHECK_NEAR((*pair.first)[i], (*pair.second)[i], 2e-6f);
+}
+}
+
+TEST_CASE("controller", held_boat_controls_follow_ticks_across_render_partitions) {
+    const auto config = fixture();
+    water::Simulation reference(config);
+    const water::BoatControl controls[]{{1, 0}, {1, -1}, {0, 0}, {-1, 0}, {-1, 1}};
+    const int substeps = water::substeps_per_quantum(config);
+    for (auto control : controls)
+        for (int tick = 0; tick < 120; ++tick)
+            for (int substep = 0; substep < substeps; ++substep)
+                reference.step(float(water::FixedClock::quantum / substeps), .15f, control);
+    const auto expected = water::download_boat(reference);
+    CHECK(std::hypot(expected.x - config.grid.lx / 2, expected.z - config.grid.lz / 2) > .1f);
+    for (int ticks_per_frame : {1, 2, 4}) {
+        water::Simulation simulation(config);
+        water::AppController app(simulation, config);
+        for (auto control : controls)
+            for (int tick = 0; tick < 120; tick += ticks_per_frame)
+                app.frame(ticks_per_frame / 120.0, false, false, 0, .01f, .15f, view(), control);
+        CHECK_NEAR(app.sim_time(), 5, 1e-14);
+        same_boat(water::download_boat(simulation), expected);
+        same_water(water::download(simulation), water::download(reference));
+    }
+}
+
+TEST_CASE("controller", overload_boat_motion_is_exactly_eight_ticks) {
+    const auto config = fixture();
+    water::Simulation simulation(config), reference(config);
+    water::AppController app(simulation, config), ordinary(reference, config);
+    app.frame(.5, false, false, 0, .01f, .15f, view(), {1, 1});
+    for (int i = 0; i < 8; ++i)
+        ordinary.frame(1.0 / 120, false, false, 0, .01f, .15f, view(), {1, 1});
+    CHECK(app.sim_time() == ordinary.sim_time());
+    CHECK(water::download_boat(simulation).vx > 0);
+    same_boat(water::download_boat(simulation), water::download_boat(reference), 0);
+    same_water(water::download(simulation), water::download(reference));
+}
+
+TEST_CASE("controller", held_boat_pause_depth_resume_and_reset) {
+    const auto config = fixture();
+    water::Simulation simulation(config), reference(config);
+    water::AppController app(simulation, config), ordinary(reference, config);
+    for (int tick = 0; tick < 120; ++tick) {
+        app.frame(1.0 / 120, false, false, 0, .01f, .15f, view(), {1, 1});
+        ordinary.frame(1.0 / 120, false, false, 0, .01f, .15f, view(), {1, 1});
+    }
+    const auto boat = water::download_boat(simulation);
+    const auto water = water::download(simulation);
+    const auto time = app.sim_time();
+    CHECK(boat.yaw > 0 && !zero(water.eta));
+    app.set_depth(.25f);
+    ordinary.set_depth(.25f);
+    app.frame(10, true, true, 120, .005f, 10, view(), {-1, -1});
+    same_boat(water::download_boat(simulation), boat, 0);
+    const auto frozen = water::download(simulation);
+    CHECK(water.eta == frozen.eta && water.u == frozen.u && water.v == frozen.v);
+    CHECK(app.sim_time() == time);
+    app.frame(1.0 / 120, false, false, 0, .005f, .15f, view(), {-1, -1});
+    ordinary.frame(1.0 / 120, false, false, 0, .005f, .15f, view(), {-1, -1});
+    CHECK_NEAR(app.sim_time(), time + 1.0 / 120, 1e-14);
+    same_boat(water::download_boat(simulation), water::download_boat(reference), 0);
+    same_water(water::download(simulation), water::download(reference));
+    CHECK(app.spawn(10, 6, view()));
+    app.reset();
+    same_boat(water::download_boat(simulation), {10, 6, 0, 0, 0, 0}, 0);
+    const auto flat = water::download(simulation);
+    CHECK(zero(flat.eta) && zero(flat.u) && zero(flat.v));
+    CHECK(app.sim_time() == 0 && app.drops().empty());
+    CHECK(simulation.config().depth == .25f);
+    CHECK(simulation.config().rain_rate == config.rain_rate);
+    CHECK(simulation.config().damping == config.damping);
+    CHECK(simulation.config().reflection == config.reflection);
+}
+
+TEST_CASE("controller", controlled_boat_is_consistent_across_depth_selected_cfl_substeps) {
+    auto shallow = fixture(), deep = fixture();
+    shallow.depth = .25f;
+    shallow.impact_strength = .005f;
+    deep.depth = 100;
+    CHECK(water::substeps_per_quantum(shallow) != water::substeps_per_quantum(deep));
+    water::Simulation a(shallow), b(deep);
+    water::AppController first(a, shallow), second(b, deep);
+    for (auto control : {water::BoatControl{1, .6f}, {0, -.4f}, {-1, -.5f}, {1, .3f}})
+        for (int tick = 0; tick < 30; ++tick) {
+            first.frame(1.0 / 120, false, false, 0, .005f, .15f, view(), control);
+            second.frame(1.0 / 120, false, false, 0, .005f, .15f, view(), control);
+        }
+    const auto x = water::download_boat(a), y = water::download_boat(b);
+    CHECK(std::hypot(x.x - y.x, x.z - y.z) < .003f);
+    CHECK(std::hypot(x.vx - y.vx, x.vz - y.vz) < .003f);
+    CHECK(std::abs(x.yaw - y.yaw) < .005f);
+    CHECK(first.sim_time() == second.sim_time());
 }
 
 TEST_CASE("controller", stalled_frame_preserves_drop_and_limits_advancement) {
