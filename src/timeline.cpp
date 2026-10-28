@@ -141,6 +141,14 @@ std::vector<Impact> DropScheduler::tick(double end_time, bool rain_enabled, floa
     return events;
 }
 
+void DropScheduler::set_depth(float depth) {
+    Config next = config_;
+    next.depth = depth;
+    next.impact_strength = std::min(next.impact_strength, 0.02f * depth);
+    substeps_per_quantum(next);
+    config_ = next;
+}
+
 void DropScheduler::reset() {
     active_.clear();
     random_.seed(config_.seed);

@@ -15,6 +15,7 @@ water::Config fixture() {
     config.grid = {96, 64, 20.0f, 12.0f};
     config.impact_radius = 0.75f;
     config.damping = 0.0f;
+    config.depth = 1;
     return config;
 }
 
@@ -91,8 +92,9 @@ double energy(const water::Snapshot& state, const water::Config& config) {
     return total * (g.lx / g.nx) * (g.lz / g.ny);
 }
 
-void check_period(bool along_x, bool transpose) {
+void check_period(bool along_x, bool transpose, float depth = 1) {
     auto config = fixture();
+    config.depth = depth;
     if (transpose) std::swap(config.grid.nx, config.grid.ny);
     water::Simulation simulation(config);
     water::upload(simulation, mode(config, along_x));
@@ -279,4 +281,39 @@ TEST_CASE("numerics", invalid_steps_and_snapshot_sizes_are_rejected_without_stat
     CHECK(final.eta == initial.eta);
     CHECK(final.u == initial.u);
     CHECK(final.v == initial.v);
+}
+
+TEST_CASE("numerics", deeper_water_has_physical_period) { check_period(true, false, 3); }
+TEST_CASE("numerics", live_depth_preserves_fields_and_updates_validation_and_cfl) {
+    auto config = fixture();
+    config.depth = 3;
+    water::Simulation simulation(config);
+    auto initial = mode(config, true);
+    std::fill(initial.u.begin(), initial.u.end(), .001f);
+    std::fill(initial.v.begin(), initial.v.end(), -.002f);
+    water::upload(simulation, initial);
+    simulation.set_depth(.25f);
+    auto after = water::download(simulation);
+    CHECK(after.eta == initial.eta && after.u == initial.u && after.v == initial.v);
+    CHECK(simulation.config().depth == .25f && simulation.config().impact_strength <= .005f);
+    const water::Impact too_strong{10, 6, .75f, .006f};
+    CHECK_THROWS(simulation.apply_impacts(&too_strong, 1), std::invalid_argument);
+    for (float depth : {0.f, -1.f, std::numeric_limits<float>::infinity(),
+                        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::max()}) {
+        CHECK_THROWS(simulation.set_depth(depth), std::invalid_argument);
+        CHECK(simulation.config().depth == .25f);
+        after = water::download(simulation);
+        CHECK(after.eta == initial.eta && after.u == initial.u && after.v == initial.v);
+    }
+    simulation.set_depth(100);
+    CHECK_THROWS(simulation.step(1.f / 120, 0), std::invalid_argument);
+    simulation.reset();
+    CHECK(simulation.config().depth == 100);
+    for (float depth : {.25f, 1.5178088f, 3.f, 100.f}) {
+        simulation.set_depth(depth);
+        for (int i = 0; i < 10; ++i) simulation.step(time_step(simulation.config()), 0);
+        after = water::download(simulation);
+        for (const auto* values : {&after.eta, &after.u, &after.v})
+            CHECK(std::all_of(values->begin(), values->end(), [](float v) { return v == 0; }));
+    }
 }

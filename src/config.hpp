@@ -11,7 +11,7 @@ struct Grid {
 
 struct Config {
     Grid grid;
-    float depth = 1.0f;
+    float depth = 3.0f;
     float gravity = 9.81f;
     float damping = 0.15f;
     float impact_radius = 0.35f;
@@ -25,6 +25,7 @@ Config parse_config(int argc, const char* const* argv);
 void validate(const Config& config);
 double stable_dt(const Config& config);
 int substeps_per_quantum(const Config& config);
+float adjust_depth(float current, int steps);
 float adjust_reflection(float current, int steps);
 
 } // namespace water

@@ -227,6 +227,16 @@ void Simulation::release() noexcept {
     if (stream_) check_cleanup(cudaStreamDestroy(stream_), "destroy simulation stream");
 }
 
+void Simulation::set_depth(float depth) {
+    Config next = config_;
+    next.depth = depth;
+    next.impact_strength = std::min(next.impact_strength, 0.02f * depth);
+    substeps_per_quantum(next);
+    const double max_dt = stable_dt(next);
+    config_ = next;
+    max_dt_ = max_dt;
+}
+
 void Simulation::reset() {
     const auto& g = config_.grid;
     check(cudaMemsetAsync(eta_, 0, sizeof(float) * g.nx * g.ny, stream_), "reset heights");

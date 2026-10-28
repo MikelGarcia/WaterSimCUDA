@@ -33,6 +33,7 @@ double drop_y(const Drop&, double sim_time);
 
 class DropScheduler {
 public:
+    void set_depth(float depth);
     explicit DropScheduler(const Config& config);
     bool spawn(float x, float z, double sim_time, const SpawnView&);
     std::vector<Impact> tick(double end_time, bool rain_enabled, float rain_rate, float strength,
@@ -43,7 +44,7 @@ public:
 private:
     void collect_arrivals(double end_time, float strength, std::vector<Impact>& events);
 
-    const Config config_;
+    Config config_;
     std::mt19937 random_;
     std::vector<Drop> active_;
     double time_ = 0.0;

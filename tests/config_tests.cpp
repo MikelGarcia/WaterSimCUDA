@@ -42,7 +42,7 @@ TEST_CASE("config", defaults_are_valid) {
     CHECK(config.grid.ny == 512);
     CHECK_NEAR(config.grid.lx, 20.0f, 1e-6f);
     CHECK_NEAR(config.grid.lz, 12.0f, 1e-6f);
-    CHECK_NEAR(config.depth, 1.0f, 1e-6f);
+    CHECK_NEAR(config.depth, 3.0f, 1e-6f);
     CHECK_NEAR(config.gravity, 9.81f, 1e-6f);
     CHECK_NEAR(config.damping, 0.15f, 1e-6f);
     CHECK_NEAR(config.impact_radius, 0.35f, 1e-6f);
@@ -119,7 +119,7 @@ TEST_CASE("config", rejects_invalid_grid_and_physics) {
         CHECK_THROWS(water::validate(config), std::invalid_argument);
     }
     CHECK_THROWS(parse({"--rain-rate", "60.1"}), std::invalid_argument);
-    CHECK_THROWS(parse({"--strength", "0.0201"}), std::invalid_argument);
+    CHECK_THROWS(parse({"--strength", "0.0601"}), std::invalid_argument);
     CHECK_THROWS(parse({"--radius", "0.01"}), std::invalid_argument);
     CHECK_THROWS(parse({"--radius", "3.1"}), std::invalid_argument);
     CHECK_THROWS(parse({"--nx", "96", "--ny", "64"}), std::invalid_argument);
@@ -179,8 +179,10 @@ TEST_CASE("config", timestep_respects_both_axes_and_quantum) {
         CHECK((1.0 / 120.0) / substeps <= dt);
         if (substeps > 1) CHECK((1.0 / 120.0) / (substeps - 1) > dt);
     }
-    CHECK(water::substeps_per_quantum(water::Config{}) == 2);
-    auto coarse = parse({"--nx", "96", "--ny", "64", "--radius", "0.75"});
+    water::Config unit_depth;
+    unit_depth.depth = 1;
+    CHECK(water::substeps_per_quantum(unit_depth) == 2);
+    auto coarse = parse({"--depth", "1", "--nx", "96", "--ny", "64", "--radius", "0.75"});
     CHECK(water::substeps_per_quantum(coarse) == 1);
     CHECK_NEAR(water::stable_dt(coarse), 0.0355973328, 1e-9);
     coarse.damping = 100.0f;
@@ -203,4 +205,14 @@ TEST_CASE("config", float_timestep_stays_within_cfl_bound_at_subdivision_boundar
     const float dt = static_cast<float>((1.0 / 120.0) / substeps);
     CHECK(dt > 0.0f);
     CHECK(dt <= water::stable_dt(config));
+}
+
+TEST_CASE("config", default_depth_and_interactive_steps) {
+    CHECK(water::Config{}.depth == 3.0f);
+    CHECK(water::adjust_depth(3, -1) == 2.75f);
+    CHECK(water::adjust_depth(3, 1) == 3.25f);
+    CHECK(water::adjust_depth(.25f, -1) == .25f);
+    CHECK(parse({"--depth", "0.1", "--strength", "0.001"}).depth == .1f);
+    for (const char* value : {"0", "-1", "nan", "inf"})
+        CHECK_THROWS(parse({"--depth", value}), std::invalid_argument);
 }

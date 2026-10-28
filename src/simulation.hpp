@@ -18,6 +18,7 @@ struct Vertex {
 
 class Simulation {
 public:
+    void set_depth(float depth);
     explicit Simulation(const Config& config);
     ~Simulation();
     Simulation(const Simulation&) = delete;
@@ -35,8 +36,8 @@ private:
     friend void upload(Simulation& simulation, const Snapshot& state);
     void release() noexcept;
 
-    const Config config_;
-    const double max_dt_;
+    Config config_;
+    double max_dt_;
     cudaStream_t stream_ = nullptr;
     float* eta_ = nullptr;
     float* u_ = nullptr;

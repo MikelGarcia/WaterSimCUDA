@@ -145,12 +145,26 @@ void demo(const water::Config& config) {
         if (!scene.resize(width, height))
             throw std::runtime_error("could not allocate refraction render target");
 
+        for (int character = GetCharPressed(); character; character = GetCharPressed()) {
+            if (character != '(' && character != ')') continue;
+            auto next = simulation.config();
+            next.depth = water::adjust_depth(next.depth, character == '(' ? -1 : 1);
+            next.impact_strength = std::min(next.impact_strength, 0.02f * next.depth);
+            try {
+                water::substeps_per_quantum(next);
+                scene.set_depth(next.depth);
+                app.set_depth(next.depth);
+                strength = std::min(strength, 0.02f * next.depth);
+            } catch (const std::exception& error) {
+                std::fprintf(stderr, "change depth: %s\n", error.what());
+            }
+        }
         if (IsKeyPressed(KEY_SPACE)) paused = !paused;
         if (IsKeyPressed(KEY_R)) app.reset();
         if (IsKeyPressed(KEY_T)) rain = !rain;
         if (IsKeyPressed(KEY_UP)) rate = std::min(60.0f, rate + 1);
         if (IsKeyPressed(KEY_DOWN)) rate = std::max(0.0f, rate - 1);
-        if (IsKeyPressed(KEY_RIGHT)) strength = std::min(0.02f * config.depth, strength + 0.001f);
+        if (IsKeyPressed(KEY_RIGHT)) strength = std::min(0.02f * simulation.config().depth, strength + 0.001f);
         if (IsKeyPressed(KEY_LEFT)) strength = std::max(0.0f, strength - 0.001f);
         if (IsKeyPressed(KEY_RIGHT_BRACKET)) damping = std::clamp(damping + 0.05f, 0.0f, 5.0f);
         if (IsKeyPressed(KEY_LEFT_BRACKET)) damping = std::clamp(damping - 0.05f, 0.0f, 5.0f);
@@ -180,7 +194,7 @@ void demo(const water::Config& config) {
 
         BeginDrawing();
         scene.draw(camera, renderer, app.drops(), app.sim_time(), reflection);
-        DrawRectangle(20, 20, 780, 128, Fade(Color{246, 249, 250, 255}, 0.94f));
+        DrawRectangle(20, 20, 780, 152, Fade(Color{246, 249, 250, 255}, 0.94f));
         DrawText(paused ? "WATER  /  PAUSED" : "WATER", 36, 32, 22, Color{27, 52, 67, 255});
         const Color status_color{45, 65, 76, 255};
         DrawText(TextFormat("%d FPS", GetFPS()), 36, 62, 16, status_color);
@@ -196,6 +210,8 @@ void demo(const water::Config& config) {
                  36, 88, 16, Color{65, 83, 93, 255});
         DrawText(TextFormat("Reflection %3.0f%%", 100 * reflection), 36, 114, 16, status_color);
         DrawText(TextFormat("/ Refraction %3.0f%%", 100 * (1 - reflection)), 208, 114, 16, status_color);
+        DrawText(TextFormat("Depth %.2f m   (/): depth", simulation.config().depth),
+                 36, 140, 16, status_color);
         DrawText("Up/Down: rain   Left/Right: strength   [/]: damping   ,/.: reflection   Esc: close",
                  28, GetScreenHeight() - 32, 14, status_color);
         EndDrawing();
@@ -221,7 +237,7 @@ void help() {
               "Usage: water_demo [options]\n"
               "  --nx 512 --ny 512        grid cells per axis [8, 2048]\n"
               "  --lx 20 --lz 12          basin dimensions (m)\n"
-              "  --depth 1               mean depth (m)\n"
+              "  --depth 3               mean depth (m)\n"
               "  --damping 0.15          drag (/s); interactive range [0, 5]\n"
               "  --radius 0.35           impact radius (m), >=2 cell widths\n"
               "  --strength 0.01         impact displacement (m), [0, 0.02 * depth]\n"
@@ -230,6 +246,7 @@ void help() {
               "  --reflection 0.5        reflection/refraction mix [0, 1]\n"
               "Space pause | R reset | T rain | arrows up/down rain, left/right strength\n"
               "[ / ] damping | , / . reflection/refraction mix (-/+ 0.05)\n"
+              "( / ) depth (-/+ 0.25 m, minimum 0.25 m)\n"
               "left click drop | right drag orbit | wheel zoom | Esc close");
 }
 }

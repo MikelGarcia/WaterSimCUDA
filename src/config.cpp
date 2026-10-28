@@ -97,6 +97,10 @@ void validate(const Config& config) {
     }
 }
 
+float adjust_depth(float current, int steps) {
+    return static_cast<float>(std::max(0.25, static_cast<double>(current) + steps * 0.25));
+}
+
 float adjust_reflection(float current, int steps) {
     return static_cast<float>(std::clamp(static_cast<double>(current) + steps * 0.05, 0.0, 1.0));
 }

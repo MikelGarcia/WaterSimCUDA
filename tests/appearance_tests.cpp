@@ -29,6 +29,7 @@ water::Config small_config() {
     water::Config config;
     config.grid = {8, 12, 4, 6};
     config.impact_radius = 1;
+    config.depth = 1;
     return config;
 }
 
@@ -923,4 +924,50 @@ TEST_CASE("appearance", rendered_acceptance_matrix) {
         EndDrawing();
         CHECK(glGetError() == GL_NO_ERROR);
     }
+}
+
+TEST_CASE("appearance", live_depth_replaces_only_basin_and_retains_old_geometry_on_failure) {
+    Context context;
+    water::SceneRenderer scene(small_config());
+    CHECK(scene.resize(840, 560));
+    const auto target = water::SceneValidation::target(scene);
+    const auto drop = water::SceneValidation::drop_mesh(scene).vaoId;
+    auto basin = water::SceneValidation::basin_mesh(scene).vaoId;
+    scene.set_depth(1);
+    CHECK(water::SceneValidation::basin_mesh(scene).vaoId == basin);
+    water::appearance_fault = water::AppearanceFault::basin_mesh;
+    CHECK_THROWS(scene.set_depth(3), std::runtime_error);
+    CHECK(water::SceneValidation::basin_mesh(scene).vaoId == basin);
+    CHECK(glIsVertexArray(basin));
+    const auto failed = water::appearance_handles;
+    CHECK(!glIsVertexArray(failed.vertex_array));
+    CHECK(!glIsBuffer(failed.positions) && !glIsBuffer(failed.normals));
+    water::appearance_fault = water::AppearanceFault::none;
+    const Camera3D overhead{{0, 12, 0}, {0, 0, 0}, {0, 0, -1}, 45, CAMERA_PERSPECTIVE};
+    for (float depth : {3.f, .25f, 1.5178088f}) {
+        scene.set_depth(depth);
+        CHECK(!glIsVertexArray(basin));
+        basin = water::SceneValidation::basin_mesh(scene).vaoId;
+        const auto& mesh = water::SceneValidation::basin_mesh(scene);
+        float top = -100;
+        for (int v = 0; v < mesh.vertexCount; ++v) {
+            const float y = mesh.vertices[v * 3 + 1];
+            top = std::max(top, y);
+            if (v < mesh.vertexCount / 5 && mesh.normals[v * 3 + 1] > .9f)
+                CHECK_NEAR(y, -depth, .000001f);
+        }
+        CHECK_NEAR(top, .12f, .000001f);
+        CHECK(water::SceneValidation::drop_mesh(scene).vaoId == drop);
+        CHECK(water::SceneValidation::target(scene).id == target.id);
+        scene.set_depth(depth);
+        CHECK(water::SceneValidation::basin_mesh(scene).vaoId == basin);
+        BeginDrawing();
+        water::SceneValidation::capture(scene, overhead);
+        const Vector3 point{0, -depth, 0};
+        const auto pixel = sample_world(target, point, overhead);
+        CHECK(pixel.color[3] == 255);
+        CHECK_NEAR(pixel.depth, expected_depth(point, overhead), .00002f);
+        EndDrawing();
+    }
+    CHECK(glGetError() == GL_NO_ERROR);
 }

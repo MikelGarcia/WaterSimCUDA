@@ -315,7 +315,9 @@ TEST_CASE("timeline", pause_freezes_in_flight_drop_until_simulation_resumes) {
 }
 
 TEST_CASE("timeline", scheduler_rejects_invalid_controls_and_backward_time) {
-    water::DropScheduler drops(water::Config{});
+    water::Config config;
+    config.depth = 1;
+    water::DropScheduler drops(config);
     drops.tick(1.0, false, 8.0f, 0.01f, view());
     CHECK_THROWS(drops.tick(0.9, false, 8.0f, 0.01f, view()), std::invalid_argument);
     CHECK_THROWS(drops.spawn(1.0f, 2.0f, 0.9, view()), std::invalid_argument);
@@ -353,4 +355,34 @@ TEST_CASE("timeline", picking_maps_corners_and_oblique_camera_rays_to_basin) {
         CHECK_NEAR(point->x, expected[i].x, 1e-5f);
         CHECK_NEAR(point->y, expected[i].y, 1e-5f);
     }
+}
+
+TEST_CASE("timeline", depth_changes_preserve_flights_random_schedule_and_strength_validation) {
+    water::Config config;
+    water::DropScheduler actual(config), reference(config);
+    actual.tick(.5, true, 60, .01f, view());
+    reference.tick(.5, true, 60, .01f, view());
+    CHECK(!actual.active().empty());
+    const auto before = actual.active();
+    actual.set_depth(.25f);
+    CHECK(actual.active().size() == before.size());
+    for (std::size_t i = 0; i < before.size(); ++i) {
+        const auto a = actual.active()[i], b = before[i];
+        CHECK(a.x == b.x && a.z == b.z && a.start == b.start);
+        CHECK(a.spawn_height == b.spawn_height && a.arrival == b.arrival);
+    }
+    CHECK_THROWS(actual.tick(.6, true, 60, .006f, view()), std::invalid_argument);
+    for (float invalid : {0.f, std::numeric_limits<float>::infinity(),
+                          std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::max()})
+        CHECK_THROWS(actual.set_depth(invalid), std::invalid_argument);
+    actual.tick(.6, true, 60, .005f, view());
+    reference.tick(.6, true, 60, .005f, view());
+    CHECK(actual.active().size() == reference.active().size());
+    for (std::size_t i = 0; i < actual.active().size(); ++i) {
+        const auto a = actual.active()[i], b = reference.active()[i];
+        CHECK(a.x == b.x && a.z == b.z && a.start == b.start);
+        CHECK(a.spawn_height == b.spawn_height && a.arrival == b.arrival);
+    }
+    actual.reset();
+    CHECK_THROWS(actual.tick(.1, false, 0, .006f, view()), std::invalid_argument);
 }

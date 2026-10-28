@@ -4,6 +4,7 @@
 #include <external/glad.h>
 #include <rlgl.h>
 #include <config.h>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -74,6 +75,59 @@ void begin_3d(const Camera3D& camera) {
     rlMatrixMode(RL_MODELVIEW);
 }
 
+Mesh build_basin(const Config& config) {
+    Mesh basin{}, cube{};
+    try {
+        const float thickness = 0.18f, rim = 0.12f;
+        const auto& g = config.grid;
+        const float wall_y = (rim - config.depth) / 2;
+        const Vector3 centers[] = {{0, -config.depth - thickness / 2, 0},
+            {-(g.lx + thickness) / 2, wall_y, 0}, {(g.lx + thickness) / 2, wall_y, 0},
+            {0, wall_y, -(g.lz + thickness) / 2}, {0, wall_y, (g.lz + thickness) / 2}};
+        const Vector3 sizes[] = {{g.lx + 2 * thickness, thickness, g.lz + 2 * thickness},
+            {thickness, config.depth + rim, g.lz + 2 * thickness},
+            {thickness, config.depth + rim, g.lz + 2 * thickness},
+            {g.lx, config.depth + rim, thickness}, {g.lx, config.depth + rim, thickness}};
+        cube = GenMeshCube(1, 1, 1);
+        const int box_vertices = cube.triangleCount * 3;
+        basin.vertexCount = 5 * box_vertices;
+        basin.triangleCount = 5 * cube.triangleCount;
+        const auto bytes = basin.vertexCount * 3 * sizeof(float);
+        basin.vertices = static_cast<float*>(MemAlloc(static_cast<unsigned>(bytes)));
+        basin.normals = static_cast<float*>(MemAlloc(static_cast<unsigned>(bytes)));
+        if (!basin.vertices || !basin.normals) {
+            throw std::bad_alloc();
+        }
+        for (int box = 0; box < 5; ++box) {
+            const int offset = box * box_vertices * 3;
+            for (int v = 0; v < box_vertices; ++v) {
+                const int source = cube.indices[v] * 3;
+                std::memcpy(basin.normals + offset + 3 * v, cube.normals + source, 3 * sizeof(float));
+                basin.vertices[offset + 3 * v] = cube.vertices[source] * sizes[box].x + centers[box].x;
+                basin.vertices[offset + 3 * v + 1] = cube.vertices[source + 1] * sizes[box].y + centers[box].y;
+                basin.vertices[offset + 3 * v + 2] = cube.vertices[source + 2] * sizes[box].z + centers[box].z;
+            }
+        }
+        UnloadMesh(cube);
+        cube = {};
+        UploadMesh(&basin, false);
+        if (!basin.vaoId || glGetError() != GL_NO_ERROR)
+            throw std::runtime_error("could not upload stone basin mesh");
+#ifdef WATER_APPEARANCE_VALIDATION
+        appearance_handles.vertex_array = basin.vaoId;
+        appearance_handles.positions = basin.vboId[0];
+        appearance_handles.normals = basin.vboId[2];
+#endif
+        SCENE_CHECKPOINT(basin_mesh);
+
+        return basin;
+    } catch (...) {
+        UnloadMesh(cube);
+        UnloadMesh(basin);
+        throw;
+    }
+}
+
 } // namespace
 
 std::string SceneRenderer::fragment_source(const char* fragment) {
@@ -131,47 +185,7 @@ SceneRenderer::SceneRenderer(const Config& config) : config_(config) {
         required_uniform(stone_shader_, "submergedOnly", "basin.fs");
         required_uniform(stone_shader_, "mvp", "basin.vs");
         required_uniform(water_shader_, "mvp", "water.vs");
-        const float thickness = 0.18f, rim = 0.12f;
-        const auto& g = config.grid;
-        const float wall_y = (rim - config.depth) / 2;
-        const Vector3 centers[] = {{0, -config.depth - thickness / 2, 0},
-            {-(g.lx + thickness) / 2, wall_y, 0}, {(g.lx + thickness) / 2, wall_y, 0},
-            {0, wall_y, -(g.lz + thickness) / 2}, {0, wall_y, (g.lz + thickness) / 2}};
-        const Vector3 sizes[] = {{g.lx + 2 * thickness, thickness, g.lz + 2 * thickness},
-            {thickness, config.depth + rim, g.lz + 2 * thickness},
-            {thickness, config.depth + rim, g.lz + 2 * thickness},
-            {g.lx, config.depth + rim, thickness}, {g.lx, config.depth + rim, thickness}};
-        Mesh cube = GenMeshCube(1, 1, 1);
-        const int box_vertices = cube.triangleCount * 3;
-        basin_.vertexCount = 5 * box_vertices;
-        basin_.triangleCount = 5 * cube.triangleCount;
-        const auto bytes = basin_.vertexCount * 3 * sizeof(float);
-        basin_.vertices = static_cast<float*>(MemAlloc(static_cast<unsigned>(bytes)));
-        basin_.normals = static_cast<float*>(MemAlloc(static_cast<unsigned>(bytes)));
-        if (!basin_.vertices || !basin_.normals) {
-            UnloadMesh(cube);
-            throw std::bad_alloc();
-        }
-        for (int box = 0; box < 5; ++box) {
-            const int offset = box * box_vertices * 3;
-            for (int v = 0; v < box_vertices; ++v) {
-                const int source = cube.indices[v] * 3;
-                std::memcpy(basin_.normals + offset + 3 * v, cube.normals + source, 3 * sizeof(float));
-                basin_.vertices[offset + 3 * v] = cube.vertices[source] * sizes[box].x + centers[box].x;
-                basin_.vertices[offset + 3 * v + 1] = cube.vertices[source + 1] * sizes[box].y + centers[box].y;
-                basin_.vertices[offset + 3 * v + 2] = cube.vertices[source + 2] * sizes[box].z + centers[box].z;
-            }
-        }
-        UnloadMesh(cube);
-        UploadMesh(&basin_, false);
-        if (!basin_.vaoId || glGetError() != GL_NO_ERROR)
-            throw std::runtime_error("could not upload stone basin mesh");
-#ifdef WATER_APPEARANCE_VALIDATION
-        appearance_handles.vertex_array = basin_.vaoId;
-        appearance_handles.positions = basin_.vboId[0];
-        appearance_handles.normals = basin_.vboId[2];
-#endif
-        SCENE_CHECKPOINT(basin_mesh);
+        basin_ = build_basin(config);
 
         constexpr int rings = 24, segments = 24;
         drop_.triangleCount = 2 * segments * (rings - 1);
@@ -216,6 +230,18 @@ SceneRenderer::SceneRenderer(const Config& config) : config_(config) {
 }
 
 SceneRenderer::~SceneRenderer() { release(); }
+
+void SceneRenderer::set_depth(float depth) {
+    Config next = config_;
+    next.depth = depth;
+    next.impact_strength = std::min(next.impact_strength, 0.02f * depth);
+    substeps_per_quantum(next);
+    if (next.depth == config_.depth) return;
+    Mesh basin = build_basin(next);
+    UnloadMesh(basin_);
+    basin_ = basin;
+    config_ = next;
+}
 
 bool SceneRenderer::resize(int width, int height) {
     if (width <= 0 || height <= 0) return false;

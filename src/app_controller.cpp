@@ -22,6 +22,18 @@ void AppController::frame(double wall_seconds, bool paused, bool rain_enabled, f
     }
 }
 
+void AppController::set_depth(float depth) {
+    Config next = simulation_.config();
+    next.depth = depth;
+    next.impact_strength = std::min(next.impact_strength, 0.02f * depth);
+    const int substeps = substeps_per_quantum(next);
+    const float dt = static_cast<float>(FixedClock::quantum / substeps);
+    simulation_.set_depth(depth);
+    scheduler_.set_depth(depth);
+    substeps_ = substeps;
+    dt_ = dt;
+}
+
 void AppController::reset() {
     simulation_.reset();
     clock_.reset();

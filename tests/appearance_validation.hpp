@@ -17,6 +17,7 @@ struct AppearanceHandles {
 extern AppearanceHandles appearance_handles;
 
 struct SceneValidation {
+    static const Mesh& basin_mesh(const SceneRenderer& scene) { return scene.basin_; }
     static const Mesh& drop_mesh(const SceneRenderer& scene) { return scene.drop_; }
     static std::string fragment_source(const char* fragment) { return SceneRenderer::fragment_source(fragment); }
     static RenderTexture2D target(const SceneRenderer& scene) { return scene.capture_; }

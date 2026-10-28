@@ -12,6 +12,7 @@ struct Drop;
 
 class SceneRenderer {
 public:
+    void set_depth(float depth);
     explicit SceneRenderer(const Config& config);
     ~SceneRenderer();
     SceneRenderer(const SceneRenderer&) = delete;

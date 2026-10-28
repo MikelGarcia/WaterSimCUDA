@@ -15,6 +15,7 @@ water::Config fixture() {
     water::Config config;
     config.grid = {96, 64, 20.0f, 12.0f};
     config.impact_radius = 0.75f;
+    config.depth = 1;
     return config;
 }
 

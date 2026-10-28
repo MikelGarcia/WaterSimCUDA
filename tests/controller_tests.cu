@@ -3,6 +3,7 @@
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <limits>
 
 namespace {
 water::SpawnView view() {
@@ -14,6 +15,7 @@ water::Config fixture() {
     water::Config config;
     config.grid = {96, 64, 20.0f, 12.0f};
     config.impact_radius = 0.75f;
+    config.depth = 1;
     return config;
 }
 
@@ -184,4 +186,39 @@ TEST_CASE("controller", manual_and_seeded_rain_births_keep_their_camera_trajecto
         CHECK(app.drops()[i].arrival == births[i].arrival);
         CHECK(app.drops()[i].spawn_height == births[i].spawn_height);
     }
+}
+
+TEST_CASE("controller", paused_depth_change_preserves_state_and_flights_then_advances_new_cfl) {
+    water::Config config;
+    water::Simulation simulation(config);
+    water::AppController app(simulation, config);
+    const water::Impact impact{10, 6, config.impact_radius, .01f};
+    simulation.apply_impacts(&impact, 1);
+    app.frame(1.0 / 120, false, false, 0, .01f, .15f, view());
+    CHECK(app.spawn(4, 5, view()));
+    const auto before = water::download(simulation);
+    const auto flight = app.drops()[0];
+    const auto time = app.sim_time();
+    app.set_depth(.25f);
+    app.frame(10, true, false, 0, .005f, .15f, view());
+    const auto after = water::download(simulation);
+    CHECK(before.eta == after.eta && before.u == after.u && before.v == after.v);
+    CHECK(app.sim_time() == time);
+    const auto drop = app.drops()[0];
+    CHECK(drop.x == flight.x && drop.z == flight.z && drop.start == flight.start);
+    CHECK(drop.spawn_height == flight.spawn_height && drop.arrival == flight.arrival);
+    CHECK(simulation.config().depth == .25f && simulation.config().impact_strength <= .005f);
+    for (float invalid : {0.f, std::numeric_limits<float>::infinity(),
+                          std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::max()}) {
+        CHECK_THROWS(app.set_depth(invalid), std::invalid_argument);
+        CHECK(simulation.config().depth == .25f && app.sim_time() == time);
+    }
+    CHECK_THROWS(app.frame(1.0 / 120, false, false, 0, .006f, .15f, view()), std::invalid_argument);
+    for (float depth : {1.5178088f, 100.f}) {
+        app.set_depth(depth);
+        app.frame(1.0 / 120, false, false, 0, .005f, .15f, view());
+    }
+    CHECK_NEAR(app.sim_time(), time + 2.0 / 120, 1e-14);
+    app.reset();
+    CHECK(simulation.config().depth == 100 && app.sim_time() == 0);
 }
