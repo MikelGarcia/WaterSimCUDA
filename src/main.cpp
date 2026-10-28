@@ -122,6 +122,7 @@ void demo(const water::Config& config) {
     bool paused = false, rain = true;
     float rate = config.rain_rate, strength = config.impact_strength;
     float damping = config.damping;
+    float reflection = config.reflection;
     SetTargetFPS(60);
     const double started = GetTime();
     double previous = started;
@@ -135,6 +136,7 @@ void demo(const water::Config& config) {
 
         const int width = GetRenderWidth(), height = GetRenderHeight();
         if (IsWindowMinimized() || width <= 0 || height <= 0) {
+            scene.resize(0, 0);
             BeginDrawing();
             EndDrawing();
             previous = GetTime();
@@ -152,6 +154,8 @@ void demo(const water::Config& config) {
         if (IsKeyPressed(KEY_LEFT)) strength = std::max(0.0f, strength - 0.001f);
         if (IsKeyPressed(KEY_RIGHT_BRACKET)) damping = std::clamp(damping + 0.05f, 0.0f, 5.0f);
         if (IsKeyPressed(KEY_LEFT_BRACKET)) damping = std::clamp(damping - 0.05f, 0.0f, 5.0f);
+        if (IsKeyPressed(KEY_COMMA)) reflection = water::adjust_reflection(reflection, -1);
+        if (IsKeyPressed(KEY_PERIOD)) reflection = water::adjust_reflection(reflection, 1);
         if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
             const auto delta = GetMouseDelta();
             yaw -= delta.x * 0.006f;
@@ -175,16 +179,8 @@ void demo(const water::Config& config) {
         renderer.update(simulation);
 
         BeginDrawing();
-        scene.draw(camera, renderer, app.drops(), app.sim_time(), config.reflection);
-        BeginMode3D(camera);
-        for (const auto& drop : app.drops()) {
-            const float height = static_cast<float>(water::drop_y(drop, app.sim_time())) +
-                                 water::drop_radius;
-            DrawSphereEx({drop.x - config.grid.lx / 2, height, drop.z - config.grid.lz / 2},
-                         water::drop_radius, 6, 8, Color{34, 134, 205, 255});
-        }
-        EndMode3D();
-        DrawRectangle(20, 20, 780, 102, Fade(Color{246, 249, 250, 255}, 0.94f));
+        scene.draw(camera, renderer, app.drops(), app.sim_time(), reflection);
+        DrawRectangle(20, 20, 780, 128, Fade(Color{246, 249, 250, 255}, 0.94f));
         DrawText(paused ? "WATER  /  PAUSED" : "WATER", 36, 32, 22, Color{27, 52, 67, 255});
         const Color status_color{45, 65, 76, 255};
         DrawText(TextFormat("%d FPS", GetFPS()), 36, 62, 16, status_color);
@@ -198,8 +194,10 @@ void demo(const water::Config& config) {
                  650, 62, 16, status_color);
         DrawText("Click: drop   Right drag: orbit   Wheel: zoom   Space: pause   R: reset   T: rain",
                  36, 88, 16, Color{65, 83, 93, 255});
-        DrawText("Up / Down: rain    Left / Right: strength    [ / ]: damping    Esc: close",
-                 28, GetScreenHeight() - 32, 16, Color{45, 65, 76, 255});
+        DrawText(TextFormat("Reflection %3.0f%%", 100 * reflection), 36, 114, 16, status_color);
+        DrawText(TextFormat("/ Refraction %3.0f%%", 100 * (1 - reflection)), 208, 114, 16, status_color);
+        DrawText("Up/Down: rain   Left/Right: strength   [/]: damping   ,/.: reflection   Esc: close",
+                 28, GetScreenHeight() - 32, 14, status_color);
         EndDrawing();
     }
     if (capture && *capture) {
@@ -229,8 +227,10 @@ void help() {
               "  --strength 0.01         impact displacement (m), [0, 0.02 * depth]\n"
               "  --rain-rate 8           random drops per second [0, 60]\n"
               "  --seed 1                random seed (unsigned integer)\n"
+              "  --reflection 0.5        reflection/refraction mix [0, 1]\n"
               "Space pause | R reset | T rain | arrows up/down rain, left/right strength\n"
-              "[ / ] damping | left click drop | right drag orbit | wheel zoom | Esc close");
+              "[ / ] damping | , / . reflection/refraction mix (-/+ 0.05)\n"
+              "left click drop | right drag orbit | wheel zoom | Esc close");
 }
 }
 

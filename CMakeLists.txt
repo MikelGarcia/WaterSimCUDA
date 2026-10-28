@@ -52,6 +52,7 @@ if(WATER_BUILD_DEMO)
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/water.fs"
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/basin.vs"
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/basin.fs"
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/drop.fs"
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/sky.fs"
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/sky.glsl"
                 "${WATER_ASSET_DIR}"
@@ -93,7 +94,7 @@ if(BUILD_TESTING)
         target_link_libraries(water_scene_renderer_validation PUBLIC water_renderer_validation water_validation)
         add_executable(water_appearance_tests tests/test_main.cpp tests/appearance_tests.cpp)
         target_compile_definitions(water_appearance_tests PRIVATE WATER_APPEARANCE_VALIDATION)
-        target_link_libraries(water_appearance_tests PRIVATE water_scene_renderer_validation)
+        target_link_libraries(water_appearance_tests PRIVATE water_scene_renderer_validation water_controller)
         add_dependencies(water_appearance_tests water_assets)
         add_test(NAME appearance COMMAND water_appearance_tests appearance)
         set_tests_properties(appearance PROPERTIES TIMEOUT 60)

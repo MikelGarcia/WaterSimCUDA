@@ -118,6 +118,9 @@ SceneRenderer::SceneRenderer(const Config& config) : config_(config) {
 #endif
         SCENE_CHECKPOINT(water_shader);
         sky_shader_ = load_shader(nullptr, "sky.fs");
+        drop_shader_ = load_shader("basin.vs", "drop.fs");
+        drop_eye_ = required_uniform(drop_shader_, "eyePosition", "drop.fs");
+        drop_time_ = required_uniform(drop_shader_, "simTime", "drop.fs");
         const auto w = [this](const char* name) { return required_uniform(water_shader_, name, "water.fs"); };
         water_locations_ = {w("eyePosition"), w("captureView"), w("captureProjection"),
                             w("captureColor"), w("captureDepth"), w("drawableSize"),
@@ -169,6 +172,46 @@ SceneRenderer::SceneRenderer(const Config& config) : config_(config) {
         appearance_handles.normals = basin_.vboId[2];
 #endif
         SCENE_CHECKPOINT(basin_mesh);
+
+        constexpr int rings = 24, segments = 24;
+        drop_.triangleCount = 2 * segments * (rings - 1);
+        drop_.vertexCount = 3 * drop_.triangleCount;
+        const unsigned drop_bytes = drop_.vertexCount * 3 * sizeof(float);
+        drop_.vertices = static_cast<float*>(MemAlloc(drop_bytes));
+        drop_.normals = static_cast<float*>(MemAlloc(drop_bytes));
+        if (!drop_.vertices || !drop_.normals) throw std::bad_alloc();
+        int next = 0;
+        // This pear profile reaches its widest point one quarter of the way up.
+        const float scale = drop_radius * 4 / (3 * std::sqrt(3.0f));
+        const auto vertex = [&](int ring, int segment) {
+            const float theta = PI * ring / rings, angle = 2 * PI * segment / segments;
+            const float radius = scale * std::sin(theta) * (1 + std::cos(theta));
+            const float y = drop_height * 0.5f * (1 - std::cos(theta));
+            const float dr = scale * (std::cos(theta) + std::cos(2 * theta));
+            const float dy = drop_height * 0.5f * std::sin(theta);
+            Vector3 normal{0, 1, 0};
+            if (ring == 0) normal = {0, -1, 0};
+            else if (ring < rings) normal = normalized({dy*std::cos(angle), -dr, dy*std::sin(angle)});
+            drop_.vertices[next] = radius * std::cos(angle);
+            drop_.vertices[next + 1] = y;
+            drop_.vertices[next + 2] = radius * std::sin(angle);
+            drop_.normals[next] = normal.x;
+            drop_.normals[next + 1] = normal.y;
+            drop_.normals[next + 2] = normal.z;
+            next += 3;
+        };
+        for (int ring = 0; ring < rings; ++ring)
+        for (int segment = 0; segment < segments; ++segment) {
+            if (ring > 0) {
+                vertex(ring, segment); vertex(ring, segment + 1); vertex(ring + 1, segment);
+            }
+            if (ring < rings - 1) {
+                vertex(ring, segment + 1); vertex(ring + 1, segment + 1); vertex(ring + 1, segment);
+            }
+        }
+        UploadMesh(&drop_, false);
+        if (!drop_.vaoId || glGetError() != GL_NO_ERROR)
+            throw std::runtime_error("could not upload water drop mesh");
     } catch (...) { release(); throw; }
 }
 
@@ -301,7 +344,7 @@ void SceneRenderer::capture(const Camera3D& camera) {
 }
 
 void SceneRenderer::draw(const Camera3D& camera, const WaterRenderer& water,
-                         const std::vector<Drop>&, double sim_time, float reflection) {
+                         const std::vector<Drop>& drops, double sim_time, float reflection) {
     capture(camera);
     ClearBackground(BLACK);
     rlViewport(0, 0, GetRenderWidth(), GetRenderHeight());
@@ -347,20 +390,39 @@ void SceneRenderer::draw(const Camera3D& camera, const WaterRenderer& water,
     rlActiveTextureSlot(depth_slot); rlDisableTexture();
     rlActiveTextureSlot(color_slot); rlDisableTexture();
     rlActiveTextureSlot(0);
+    SetShaderValue(drop_shader_, drop_eye_, &camera.position, SHADER_UNIFORM_VEC3);
+    SetShaderValue(drop_shader_, drop_time_, &time, SHADER_UNIFORM_FLOAT);
+    MaterialMap maps[MAX_MATERIAL_MAPS]{};
+    maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    maps[MATERIAL_MAP_DIFFUSE].texture.id = rlGetTextureIdDefault();
+    Material material{};
+    material.shader = drop_shader_;
+    material.maps = maps;
+    for (const auto& drop : drops) {
+        Matrix transform = identity;
+        transform.m12 = drop.x - config_.grid.lx / 2;
+        transform.m13 = static_cast<float>(drop_y(drop, sim_time));
+        transform.m14 = drop.z - config_.grid.lz / 2;
+        DrawMesh(drop_, material, transform);
+    }
     EndMode3D();
 }
 
 void SceneRenderer::release() noexcept {
     unload_target(capture_);
     UnloadMesh(basin_);
+    UnloadMesh(drop_);
     if (stone_shader_.id) UnloadShader(stone_shader_);
     if (water_shader_.id) UnloadShader(water_shader_);
     if (sky_shader_.id) UnloadShader(sky_shader_);
+    if (drop_shader_.id) UnloadShader(drop_shader_);
     capture_ = {};
     basin_ = {};
+    drop_ = {};
     stone_shader_ = {};
     water_shader_ = {};
     sky_shader_ = {};
+    drop_shader_ = {};
 }
 
 } // namespace water

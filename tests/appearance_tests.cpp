@@ -2,6 +2,8 @@
 #include "appearance_validation.hpp"
 #include "water_renderer.hpp"
 #include "timeline.hpp"
+#include "app_controller.hpp"
+#include "validation.hpp"
 #include <external/glad.h>
 #include <rlgl.h>
 #include <array>
@@ -182,6 +184,123 @@ struct AssetOverride {
 };
 
 } // namespace
+
+TEST_CASE("appearance", drop_mesh_obeys_spawn_bounds) {
+    Context context;
+    water::SceneRenderer scene(small_config());
+    const auto& mesh = water::SceneValidation::drop_mesh(scene);
+    CHECK(mesh.vertexCount > 100 && mesh.vertices && mesh.normals && mesh.vaoId);
+    float bottom = 1, top = 0, lower_radius = 0, upper_radius = 0;
+    for (int i = 0; i < mesh.vertexCount; ++i) {
+        const float x = mesh.vertices[3*i], y = mesh.vertices[3*i+1], z = mesh.vertices[3*i+2];
+        const float radius = std::sqrt(x*x + z*z);
+        CHECK(radius <= 0.065001f && y >= 0 && y <= 0.280001f);
+        bottom = std::min(bottom, y); top = std::max(top, y);
+        if (y < 0.14f) lower_radius = std::max(lower_radius, radius);
+        if (y > 0.23f) upper_radius = std::max(upper_radius, radius);
+        const float nx = mesh.normals[3*i], ny = mesh.normals[3*i+1], nz = mesh.normals[3*i+2];
+        CHECK_NEAR(nx*nx + ny*ny + nz*nz, 1.0f, 0.001f);
+    }
+    CHECK_NEAR(bottom, 0.0f, 0.00001f); CHECK_NEAR(top, 0.28f, 0.00001f);
+    CHECK(lower_radius > 0.06f && upper_radius < 0.025f);
+    const water::Grid grid{96, 64, 20, 12};
+    for (float pitch : {0.15f, 0.72f, 1.45f})
+    for (float yaw : {0.0f, 0.65f, 1.8f, 3.4f, 4.9f})
+    for (float scale : {0.4f, 1.65f, 4.0f}) {
+        const float distance = scale * 20;
+        const Camera3D view{{distance*std::cos(pitch)*std::sin(yaw), distance*std::sin(pitch),
+                             distance*std::cos(pitch)*std::cos(yaw)}, {0,0,0}, {0,1,0}, 42, CAMERA_PERSPECTIVE};
+        const auto eye = view.position;
+        const Vector3 forward{-eye.x/distance, -eye.y/distance, -eye.z/distance};
+        const Vector3 up{-std::sin(pitch)*std::sin(yaw), std::cos(pitch), -std::sin(pitch)*std::cos(yaw)};
+        for (const Vector2 point : {Vector2{0,0}, {20,0}, {0,12}, {20,12}, {10,6}}) {
+            const double height = water::drop_spawn_height(point.x, point.y, grid, {view, 1.5f});
+            bool above = true, behind = true;
+            for (int i = 0; i < mesh.vertexCount; ++i) {
+                const double x = point.x-10 + mesh.vertices[3*i]-eye.x;
+                const double y = height + mesh.vertices[3*i+1]-eye.y;
+                const double z = point.y-6 + mesh.vertices[3*i+2]-eye.z;
+                const double depth = x*forward.x+y*forward.y+z*forward.z;
+                const double vertical = x*up.x+y*up.y+z*up.z;
+                above &= vertical*std::cos(21*DEG2RAD)-depth*std::sin(21*DEG2RAD) >= 0.11999;
+                behind &= -depth >= 0.11999;
+            }
+            CHECK(above || behind);
+        }
+    }
+}
+
+TEST_CASE("appearance", drop_rendering_uses_stored_flight) {
+    Context context;
+    auto config = small_config();
+    water::Simulation simulation(config);
+    water::AppController app(simulation, config);
+    water::WaterRenderer water(config.grid);
+    water::SceneRenderer scene(config);
+    CHECK(scene.resize(840, 560));
+    const water::SpawnView spawn_view{camera, 1.5f};
+    CHECK(app.spawn(2, 3, spawn_view));
+    const auto born = app.drops().front();
+    const double visible_time = std::sqrt(2*(born.spawn_height - 1.4)/9.81);
+    while (app.sim_time() + water::FixedClock::quantum <= visible_time)
+        app.frame(water::FixedClock::quantum, false, false, 0, 0.01f, 0.15f, spawn_view);
+    CHECK(app.drops().size() == 1);
+    CHECK(app.drops()[0].arrival == born.arrival && app.drops()[0].spawn_height == born.spawn_height);
+    const double time = app.sim_time();
+    const float y = static_cast<float>(born.spawn_height - 0.5*9.81*time*time);
+    const auto projected = GetWorldToScreenEx({0, y+0.075f, 0}, camera, 840, 560);
+    const int px = int(projected.x), py = 559-int(projected.y);
+    CHECK(px > 20 && px < 820 && py > 20 && py < 540);
+    water.update(simulation);
+    BeginDrawing();
+    scene.draw(camera, water, {}, time, 0.5f);
+    std::array<unsigned char, 20*24*4> empty{}, visible{}, paused{};
+    glReadPixels(px-10, py-12, 20, 24, GL_RGBA, GL_UNSIGNED_BYTE, empty.data());
+    scene.draw(camera, water, app.drops(), time, 0.5f);
+    glReadPixels(px-10, py-12, 20, 24, GL_RGBA, GL_UNSIGNED_BYTE, visible.data());
+    int changed = 0;
+    for (std::size_t i = 0; i < empty.size(); i += 4)
+        if (std::abs(int(empty[i])-int(visible[i])) + std::abs(int(empty[i+2])-int(visible[i+2])) > 15) ++changed;
+    CHECK(changed > 12);
+    const auto image = LoadImageFromScreen();
+    CHECK(ExportImage(image, "appearance-drop-midflight.png")); UnloadImage(image);
+    app.frame(10, true, false, 0, 0.01f, 0.15f, spawn_view);
+    CHECK(app.sim_time() == time);
+    scene.draw(camera, water, app.drops(), app.sim_time(), 0.5f);
+    glReadPixels(px-10, py-12, 20, 24, GL_RGBA, GL_UNSIGNED_BYTE, paused.data());
+    CHECK(visible == paused);
+    const Camera3D closeup{{0, 2.0f, 1.8f}, {0, y + 0.11f, 0}, {0, 1, 0}, 32, CAMERA_PERSPECTIVE};
+    app.frame(10, true, false, 0, 0.01f, 0.15f, {closeup, 1.5f});
+    CHECK(app.sim_time() == time && app.drops()[0].spawn_height == born.spawn_height &&
+          app.drops()[0].arrival == born.arrival);
+    scene.draw(closeup, water, app.drops(), time, 0.5f);
+    const auto detail = LoadImageFromScreen();
+    CHECK(ExportImage(detail, "appearance-drop-closeup.png")); UnloadImage(detail);
+    EndDrawing();
+    while (app.sim_time() + water::FixedClock::quantum < born.arrival)
+        app.frame(water::FixedClock::quantum, false, false, 0, 0.01f, 0.15f, spawn_view);
+    const auto before = water::download(simulation);
+    for (float eta : before.eta) CHECK(eta == 0);
+    CHECK(app.drops().size() == 1);
+    app.frame(water::FixedClock::quantum, false, false, 0, 0.01f, 0.15f, spawn_view);
+    CHECK(app.sim_time() >= born.arrival && app.drops().empty());
+    const auto after = water::download(simulation);
+    float amplitude = 0;
+    for (float eta : after.eta) amplitude = std::max(amplitude, std::abs(eta));
+    CHECK(amplitude > 0.0001f);
+    water.update(simulation);
+    BeginDrawing();
+    scene.draw(camera, water, app.drops(), app.sim_time(), 0.5f);
+    glReadPixels(px-10, py-12, 20, 24, GL_RGBA, GL_UNSIGNED_BYTE, visible.data());
+    scene.draw(camera, water, {}, app.sim_time(), 0.5f);
+    glReadPixels(px-10, py-12, 20, 24, GL_RGBA, GL_UNSIGNED_BYTE, empty.data());
+    CHECK(visible == empty);
+    EndDrawing();
+    CHECK(MeasureText("Up/Down: rain   Left/Right: strength   [/]: damping   ,/.: reflection   Esc: close", 14) <= 784);
+    app.reset();
+    CHECK(app.sim_time() == 0 && app.drops().empty());
+    CHECK(glGetError() == GL_NO_ERROR);
+}
 
 TEST_CASE("appearance", mix_endpoints_are_exact_color_weights) {
     Context context;

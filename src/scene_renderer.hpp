@@ -33,9 +33,12 @@ private:
 
     Config config_;
     Mesh basin_{};
+    Mesh drop_{};
     Shader stone_shader_{};
     Shader water_shader_{};
     Shader sky_shader_{};
+    Shader drop_shader_{};
+    int drop_eye_ = -1, drop_time_ = -1;
     struct {
         int eye, view, projection, color, depth, size, planes, time, reflection;
     } water_locations_{};
