@@ -8,6 +8,7 @@
 namespace water {
 
 class WaterRenderer;
+class BoatRenderer;
 struct Drop;
 
 class SceneRenderer {
@@ -19,14 +20,14 @@ public:
     SceneRenderer& operator=(const SceneRenderer&) = delete;
 
     bool resize(int drawable_width, int drawable_height);
-    void draw(const Camera3D&, const WaterRenderer&, const std::vector<Drop>&,
+    void draw(const Camera3D&, const WaterRenderer&, const BoatRenderer&, const std::vector<Drop>&,
               double sim_time, float reflection);
 
 private:
 #ifdef WATER_APPEARANCE_VALIDATION
     friend struct SceneValidation;
 #endif
-    void capture(const Camera3D& camera);
+    void capture(const Camera3D& camera, const BoatRenderer& boat);
     static std::string fragment_source(const char* fragment);
     static Shader load_shader(const char* vertex, const char* fragment);
     void draw_basin(bool submerged);

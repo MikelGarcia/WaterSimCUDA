@@ -12,6 +12,23 @@ uniform vec2 drawableSize;
 uniform vec2 clipPlanes;
 uniform float simTime;
 uniform float reflectionWeight;
+uniform samplerBuffer boatPose;
+uniform vec2 boatWaterline[16];
+uniform int boatWaterlineCount;
+
+bool insideBoat(vec2 world) {
+    if (boatWaterlineCount < 3) return false;
+    vec4 forward = texelFetch(boatPose,0);
+    vec4 transverse = texelFetch(boatPose,2);
+    vec2 delta = world - texelFetch(boatPose,3).xz;
+    vec2 local = vec2(dot(delta,forward.xz),dot(delta,transverse.xz));
+    for (int i=0; i<boatWaterlineCount; ++i) {
+        vec2 a=boatWaterline[i], edge=boatWaterline[(i+1)%boatWaterlineCount]-a;
+        vec2 point=local-a;
+        if (edge.x*point.y-edge.y*point.x < 0.0) return false;
+    }
+    return true;
+}
 out vec4 finalColor;
 
 float viewDepth(float depth) {
@@ -29,6 +46,7 @@ bool validStone(vec2 uv, float waterDepth, out float basinDepth) {
 }
 
 void main() {
+    if (insideBoat(worldPosition.xz)) discard;
     vec3 n = normalize(normal);
     vec3 view = normalize(eyePosition - worldPosition);
     vec4 eye = captureView * vec4(worldPosition, 1.0);

@@ -1,5 +1,6 @@
 #include "scene_renderer.hpp"
 #include "water_renderer.hpp"
+#include "boat_renderer.hpp"
 #include "timeline.hpp"
 #include <external/glad.h>
 #include <rlgl.h>
@@ -157,6 +158,8 @@ Shader SceneRenderer::load_shader(const char* vertex, const char* fragment) {
 
 SceneRenderer::SceneRenderer(const Config& config) : config_(config) {
     if (!IsWindowReady()) throw std::runtime_error("scene renderer requires a current OpenGL context");
+    GLint caller_program = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &caller_program);
     try {
 #ifdef WATER_APPEARANCE_VALIDATION
         appearance_handles = {};
@@ -182,6 +185,13 @@ SceneRenderer::SceneRenderer(const Config& config) : config_(config) {
         const auto s = [this](const char* name) { return required_uniform(sky_shader_, name, "sky.fs"); };
         sky_locations_ = {s("cameraForward"), s("cameraRight"), s("cameraUp"), s("drawableSize"),
                           s("logicalAspect"), s("tanHalfFov"), s("simTime")};
+        const int pose_slot = 15;
+        SetShaderValue(water_shader_, required_uniform(water_shader_, "boatPose", "water.fs"), &pose_slot, SHADER_UNIFORM_INT);
+        static_assert(sizeof(BoatPoint) == 2 * sizeof(float));
+        SetShaderValueV(water_shader_, required_uniform(water_shader_, "boatWaterline[0]", "water.fs"),
+                        boat_waterline, SHADER_UNIFORM_VEC2, boat_waterline_count);
+        SetShaderValue(water_shader_, required_uniform(water_shader_, "boatWaterlineCount", "water.fs"),
+                       &boat_waterline_count, SHADER_UNIFORM_INT);
         required_uniform(stone_shader_, "submergedOnly", "basin.fs");
         required_uniform(stone_shader_, "mvp", "basin.vs");
         required_uniform(water_shader_, "mvp", "water.vs");
@@ -272,7 +282,12 @@ SceneRenderer::SceneRenderer(const Config& config) : config_(config) {
         UploadMesh(&drop_, false);
         if (!drop_.vaoId || glGetError() != GL_NO_ERROR)
             throw std::runtime_error("could not upload water drop mesh");
-    } catch (...) { release(); throw; }
+    } catch (...) {
+        glUseProgram(caller_program);
+        release();
+        throw;
+    }
+    glUseProgram(caller_program);
 }
 
 SceneRenderer::~SceneRenderer() { release(); }
@@ -366,7 +381,7 @@ void SceneRenderer::draw_basin(bool submerged) {
     DrawMesh(basin_, material, identity);
 }
 
-void SceneRenderer::capture(const Camera3D& camera) {
+void SceneRenderer::capture(const Camera3D& camera, const BoatRenderer& boat) {
     if (!capture_.id) return;
     rlDrawRenderBatchActive();
     GLint draw_fbo = 0, read_fbo = 0, viewport[4]{}, depth_func = 0;
@@ -397,9 +412,11 @@ void SceneRenderer::capture(const Camera3D& camera) {
     glDepthFunc(GL_LESS);
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     draw_basin(false);
+    boat.draw(camera, false);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDepthFunc(GL_LEQUAL);
     draw_basin(true);
+    boat.draw(camera, true);
     EndMode3D();
     glDepthFunc(depth_func);
     glDepthMask(depth_mask);
@@ -415,9 +432,9 @@ void SceneRenderer::capture(const Camera3D& camera) {
     rlSetMatrixProjection(old_projection);
 }
 
-void SceneRenderer::draw(const Camera3D& camera, const WaterRenderer& water,
+void SceneRenderer::draw(const Camera3D& camera, const WaterRenderer& water, const BoatRenderer& boat,
                          const std::vector<Drop>& drops, double sim_time, float reflection) {
-    capture(camera);
+    capture(camera, boat);
     ClearBackground(BLACK);
     rlViewport(0, 0, GetRenderWidth(), GetRenderHeight());
     const float time = static_cast<float>(sim_time);
@@ -449,6 +466,7 @@ void SceneRenderer::draw(const Camera3D& camera, const WaterRenderer& water,
     ground.maps = ground_maps;
     DrawMesh(grass_, ground, identity);
     draw_basin(false);
+    boat.draw(camera, false);
     const Vector2 size{static_cast<float>(capture_.texture.width), static_cast<float>(capture_.texture.height)};
     const Vector2 planes{static_cast<float>(rlGetCullDistanceNear()), static_cast<float>(rlGetCullDistanceFar())};
     SetShaderValue(water_shader_, water_locations_.eye, &camera.position, SHADER_UNIFORM_VEC3);
@@ -465,7 +483,16 @@ void SceneRenderer::draw(const Camera3D& camera, const WaterRenderer& water,
     rlActiveTextureSlot(color_slot); rlEnableTexture(capture_.texture.id);
     rlActiveTextureSlot(depth_slot); rlEnableTexture(capture_.depth.id);
     rlActiveTextureSlot(0);
+    rlDrawRenderBatchActive();
+    GLint active = 0, pose_binding = 0;
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &active);
+    glActiveTexture(GL_TEXTURE15);
+    glGetIntegerv(GL_TEXTURE_BINDING_BUFFER, &pose_binding);
+    glBindTexture(GL_TEXTURE_BUFFER, boat.pose_texture());
     water.draw(water_shader_, identity);
+    glActiveTexture(GL_TEXTURE15);
+    glBindTexture(GL_TEXTURE_BUFFER, pose_binding);
+    glActiveTexture(active);
     rlActiveTextureSlot(depth_slot); rlDisableTexture();
     rlActiveTextureSlot(color_slot); rlDisableTexture();
     rlActiveTextureSlot(0);

@@ -2,6 +2,7 @@
 #include "timing_average.hpp"
 #include "water_renderer.hpp"
 #include "scene_renderer.hpp"
+#include "boat_renderer.hpp"
 
 #include <algorithm>
 #include <array>
@@ -108,6 +109,7 @@ void demo(const water::Config& config) {
     water::select_gl_cuda_device();
     water::Simulation simulation(config);
     water::WaterRenderer renderer(config.grid);
+    water::BoatRenderer boat(config.grid);
     water::AppController app(simulation, config);
     water::SceneRenderer scene(config);
     GpuTimer timer;
@@ -196,9 +198,10 @@ void demo(const water::Config& config) {
         app.frame(elapsed, paused, rain, rate, strength, damping, spawn_view, control);
         timer.end(simulation.stream(), app.sim_time() != old_time);
         renderer.update(simulation);
+        boat.update(simulation);
 
         BeginDrawing();
-        scene.draw(camera, renderer, app.drops(), app.sim_time(), reflection);
+        scene.draw(camera, renderer, boat, app.drops(), app.sim_time(), reflection);
         DrawRectangle(20, 20, 780, 152, Fade(Color{246, 249, 250, 255}, 0.94f));
         DrawText(paused ? "WATER  /  PAUSED" : "WATER", 36, 32, 22, Color{27, 52, 67, 255});
         const Color status_color{45, 65, 76, 255};

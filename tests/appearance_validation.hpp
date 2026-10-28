@@ -23,7 +23,7 @@ struct SceneValidation {
     static const Mesh& drop_mesh(const SceneRenderer& scene) { return scene.drop_; }
     static std::string fragment_source(const char* fragment) { return SceneRenderer::fragment_source(fragment); }
     static RenderTexture2D target(const SceneRenderer& scene) { return scene.capture_; }
-    static void capture(SceneRenderer& scene, const Camera3D& camera) { scene.capture(camera); }
+    static void capture(SceneRenderer& scene, const Camera3D& camera, const BoatRenderer& boat) { scene.capture(camera, boat); }
     static Matrix capture_projection(const SceneRenderer& scene) { return scene.capture_projection_; }
     static Matrix projection(const SceneRenderer& scene) { return scene.projection_; }
     static Matrix capture_view(const SceneRenderer& scene) { return scene.capture_view_; }

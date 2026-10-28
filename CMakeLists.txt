@@ -35,8 +35,10 @@ if(WATER_BUILD_DEMO)
     target_link_libraries(water_timeline PUBLIC water_core raylib)
     add_library(water_renderer src/water_renderer.cpp)
     target_link_libraries(water_renderer PUBLIC water_core raylib)
+    add_library(water_boat_renderer src/boat_renderer.cpp)
+    target_link_libraries(water_boat_renderer PUBLIC water_renderer)
     add_library(water_scene_renderer src/scene_renderer.cpp)
-    target_link_libraries(water_scene_renderer PUBLIC water_renderer)
+    target_link_libraries(water_scene_renderer PUBLIC water_boat_renderer water_timeline)
     add_library(water_controller src/app_controller.cpp)
     target_link_libraries(water_controller PUBLIC water_timeline)
     add_executable(water_demo src/main.cpp)
@@ -48,6 +50,8 @@ if(WATER_BUILD_DEMO)
     add_custom_target(water_assets
         COMMAND ${CMAKE_COMMAND} -E make_directory "${WATER_ASSET_DIR}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/boat.vs"
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/boat.fs"
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/water.vs"
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/water.fs"
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/basin.vs"
@@ -93,12 +97,21 @@ if(BUILD_TESTING)
         target_include_directories(water_renderer_validation PRIVATE tests)
         target_link_libraries(water_renderer_validation PUBLIC water_core raylib)
         target_link_libraries(water_interop_tests PRIVATE water_validation water_renderer_validation)
+        add_library(water_boat_renderer_validation src/boat_renderer.cpp)
+        target_compile_definitions(water_boat_renderer_validation PRIVATE WATER_INTEROP_VALIDATION)
+        target_include_directories(water_boat_renderer_validation PRIVATE tests)
+        target_link_libraries(water_boat_renderer_validation PUBLIC water_renderer_validation)
+        add_executable(water_boat_interop_tests tests/test_main.cpp tests/boat_interop_tests.cpp)
+        target_compile_definitions(water_boat_interop_tests PRIVATE WATER_APPEARANCE_VALIDATION)
+        target_link_libraries(water_boat_interop_tests PRIVATE water_boat_renderer_validation water_scene_renderer_validation water_validation)
+        add_dependencies(water_boat_interop_tests water_assets)
+        add_test(NAME boat_interop COMMAND water_boat_interop_tests boat_interop)
         add_test(NAME interop COMMAND water_interop_tests interop)
         set_tests_properties(interop PROPERTIES TIMEOUT 60)
         add_library(water_scene_renderer_validation src/scene_renderer.cpp)
         target_compile_definitions(water_scene_renderer_validation PRIVATE WATER_APPEARANCE_VALIDATION)
         target_include_directories(water_scene_renderer_validation PRIVATE tests)
-        target_link_libraries(water_scene_renderer_validation PUBLIC water_renderer_validation water_validation)
+        target_link_libraries(water_scene_renderer_validation PUBLIC water_boat_renderer_validation water_validation water_timeline)
         add_executable(water_appearance_tests tests/test_main.cpp tests/appearance_tests.cpp)
         target_compile_definitions(water_appearance_tests PRIVATE WATER_APPEARANCE_VALIDATION)
         target_link_libraries(water_appearance_tests PRIVATE water_scene_renderer_validation water_controller)

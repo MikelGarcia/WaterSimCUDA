@@ -1,5 +1,7 @@
 #include "test_support.hpp"
 #include "appearance_validation.hpp"
+#include <memory>
+#include "boat_renderer.hpp"
 #include "water_renderer.hpp"
 #include "timeline.hpp"
 #include "app_controller.hpp"
@@ -14,6 +16,19 @@
 namespace {
 
 struct Context {
+    std::unique_ptr<water::Simulation> boat_simulation;
+    std::unique_ptr<water::BoatRenderer> boat_renderer;
+    const water::BoatRenderer& boat() {
+        if (!boat_renderer) {
+            water::Config config; config.grid={8,12,4,6}; config.impact_radius=1;
+            boat_simulation=std::make_unique<water::Simulation>(config);
+            // Keep the legacy basin/grass landmarks clear of the added boat.
+            water::upload_boat(*boat_simulation,{.4f,.4f,0,0,0,0});
+            boat_renderer=std::make_unique<water::BoatRenderer>(config.grid);
+            boat_renderer->update(*boat_simulation);
+        }
+        return *boat_renderer;
+    }
     Context(int width = 840, int height = 560) {
         SetTraceLogLevel(LOG_WARNING);
         SetConfigFlags(FLAG_WINDOW_HIDDEN);
@@ -22,7 +37,7 @@ struct Context {
         water::select_gl_cuda_device();
         std::cout << "GL renderer: " << glGetString(GL_RENDERER) << '\n';
     }
-    ~Context() { water::appearance_fault = water::AppearanceFault::none; CloseWindow(); }
+    ~Context() { boat_renderer.reset(); boat_simulation.reset(); water::appearance_fault = water::AppearanceFault::none; CloseWindow(); }
 };
 
 water::Config small_config() {
@@ -282,10 +297,10 @@ TEST_CASE("appearance", drop_rendering_uses_stored_flight) {
     CHECK(px > 20 && px < 820 && py > 20 && py < 540);
     water.update(simulation);
     BeginDrawing();
-    scene.draw(camera, water, {}, time, 0.5f);
+    scene.draw(camera, water, context.boat(), {}, time, 0.5f);
     std::array<unsigned char, 20*24*4> empty{}, visible{}, paused{};
     glReadPixels(px-10, py-12, 20, 24, GL_RGBA, GL_UNSIGNED_BYTE, empty.data());
-    scene.draw(camera, water, app.drops(), time, 0.5f);
+    scene.draw(camera, water, context.boat(), app.drops(), time, 0.5f);
     glReadPixels(px-10, py-12, 20, 24, GL_RGBA, GL_UNSIGNED_BYTE, visible.data());
     int changed = 0;
     for (std::size_t i = 0; i < empty.size(); i += 4)
@@ -295,14 +310,14 @@ TEST_CASE("appearance", drop_rendering_uses_stored_flight) {
     CHECK(ExportImage(image, "appearance-drop-midflight.png")); UnloadImage(image);
     app.frame(10, true, false, 0, 0.01f, 0.15f, spawn_view);
     CHECK(app.sim_time() == time);
-    scene.draw(camera, water, app.drops(), app.sim_time(), 0.5f);
+    scene.draw(camera, water, context.boat(), app.drops(), app.sim_time(), 0.5f);
     glReadPixels(px-10, py-12, 20, 24, GL_RGBA, GL_UNSIGNED_BYTE, paused.data());
     CHECK(visible == paused);
     const Camera3D closeup{{0, 2.0f, 1.8f}, {0, y + 0.11f, 0}, {0, 1, 0}, 32, CAMERA_PERSPECTIVE};
     app.frame(10, true, false, 0, 0.01f, 0.15f, {closeup, 1.5f});
     CHECK(app.sim_time() == time && app.drops()[0].spawn_height == born.spawn_height &&
           app.drops()[0].arrival == born.arrival);
-    scene.draw(closeup, water, app.drops(), time, 0.5f);
+    scene.draw(closeup, water, context.boat(), app.drops(), time, 0.5f);
     const auto detail = LoadImageFromScreen();
     CHECK(ExportImage(detail, "appearance-drop-closeup.png")); UnloadImage(detail);
     EndDrawing();
@@ -319,9 +334,9 @@ TEST_CASE("appearance", drop_rendering_uses_stored_flight) {
     CHECK(amplitude > 0.0001f);
     water.update(simulation);
     BeginDrawing();
-    scene.draw(camera, water, app.drops(), app.sim_time(), 0.5f);
+    scene.draw(camera, water, context.boat(), app.drops(), app.sim_time(), 0.5f);
     glReadPixels(px-10, py-12, 20, 24, GL_RGBA, GL_UNSIGNED_BYTE, visible.data());
-    scene.draw(camera, water, {}, app.sim_time(), 0.5f);
+    scene.draw(camera, water, context.boat(), {}, app.sim_time(), 0.5f);
     glReadPixels(px-10, py-12, 20, 24, GL_RGBA, GL_UNSIGNED_BYTE, empty.data());
     CHECK(visible == empty);
     EndDrawing();
@@ -350,7 +365,7 @@ TEST_CASE("appearance", mix_endpoints_are_exact_color_weights) {
             std::array<std::vector<unsigned char>, 3> images;
             for (int i = 0; i < 3; ++i) {
                 BeginDrawing();
-                scene.draw(view, water, {}, 12, i * 0.5f);
+                scene.draw(view, water, context.boat(), {}, 12, i * 0.5f);
                 rlDrawRenderBatchActive();
                 images[i].resize(80 * 40 * 4);
                 glReadPixels(380, 260, 80, 40, GL_RGBA, GL_UNSIGNED_BYTE, images[i].data());
@@ -389,7 +404,7 @@ TEST_CASE("appearance", normal_driven_refraction_moves_stone) {
         }
         water.update(simulation);
         BeginDrawing();
-        scene.draw(overhead, water, {}, 12, 0);
+        scene.draw(overhead, water, context.boat(), {}, 12, 0);
         images[i].resize(160 * 160 * 4);
         glReadPixels(340, 200, 160, 160, GL_RGBA, GL_UNSIGNED_BYTE, images[i].data());
         if (!i) {
@@ -426,7 +441,7 @@ TEST_CASE("appearance", sky_direction_time_and_pause_are_shared) {
     std::array<std::vector<unsigned char>, 4> images;
     for (int i = 0; i < 4; ++i) {
         BeginDrawing();
-        scene.draw(sky_camera, water, {}, i == 2 ? 90 : 0, 1);
+        scene.draw(sky_camera, water, context.boat(), {}, i == 2 ? 90 : 0, 1);
         images[i].resize(840 * 560 * 4);
         glReadPixels(0, 0, 840, 560, GL_RGBA, GL_UNSIGNED_BYTE, images[i].data());
         EndDrawing();
@@ -441,18 +456,18 @@ TEST_CASE("appearance", sky_direction_time_and_pause_are_shared) {
     SkyProbe probe;
     for (const float time : {0.0f, 90.0f}) {
         BeginDrawing();
-        scene.draw(sky_camera, water, {}, time, 1);
+        scene.draw(sky_camera, water, context.boat(), {}, time, 1);
         const auto background = sample({}, 420, 280);
         const Ray ray = GetScreenToWorldRay({420.5f, 279.5f}, sky_camera);
         const auto expected = probe.read(ray.direction, time);
         for (int c = 0; c < 3; ++c) CHECK_NEAR(int(background.color[c]), int(expected.color[c]), 2);
         auto moved = sky_camera;
         moved.position.x += 50; moved.target.x += 50;
-        scene.draw(moved, water, {}, time, 1);
+        scene.draw(moved, water, context.boat(), {}, time, 1);
         const auto paused = sample({}, 420, 280);
         for (int c = 0; c < 3; ++c) CHECK_NEAR(int(paused.color[c]), int(expected.color[c]), 2);
         const Camera3D reflected{{-8, 4, 0}, {0, 0, 0}, {0, 1, 0}, 45, CAMERA_PERSPECTIVE};
-        scene.draw(reflected, water, {}, time, 1);
+        scene.draw(reflected, water, context.boat(), {}, time, 1);
         const auto reflection = sample({}, 420, 280);
         const Ray incident = GetScreenToWorldRay({420.5f, 279.5f}, reflected);
         const auto sky = probe.read({incident.direction.x, -incident.direction.y, incident.direction.z}, time);
@@ -466,13 +481,13 @@ TEST_CASE("appearance", sky_direction_time_and_pause_are_shared) {
         const auto visibility = probe.read({0, 1, 0}, time, true);
         CHECK(time > 0 ? visibility.color[0] < 25 : visibility.color[0] > 230);
         const Camera3D sun_camera{{0, 8, 0}, {-0.35f, 8.85f, -0.4f}, {0, 1, 0}, 45, CAMERA_PERSPECTIVE};
-        scene.draw(sun_camera, water, {}, time, 1);
+        scene.draw(sun_camera, water, context.boat(), {}, time, 1);
         sunlight[sun_index++] = sample({}, 420, 280);
         const auto sun_ray = GetScreenToWorldRay({420.5f, 279.5f}, sun_camera);
         const auto expected = probe.read(sun_ray.direction, time);
         for (int c = 0; c < 3; ++c) CHECK_NEAR(int(sunlight[sun_index-1].color[c]), int(expected.color[c]), 2);
         const Camera3D reflected{{2.8f, 6.8f, 3.2f}, {0, 0, 0}, {0, 1, 0}, 45, CAMERA_PERSPECTIVE};
-        scene.draw(reflected, water, {}, time, 1);
+        scene.draw(reflected, water, context.boat(), {}, time, 1);
         const auto highlight = sample({}, 420, 280);
         const auto incident = GetScreenToWorldRay({420.5f, 279.5f}, reflected);
         const auto sky = probe.read({incident.direction.x, -incident.direction.y, incident.direction.z}, time);
@@ -492,7 +507,7 @@ TEST_CASE("appearance", refraction_rejects_rim_clear_and_screen_edges) {
     for (const Camera3D view : {camera,
             Camera3D{{0, 0.7f, 7}, {0, -0.2f, 0}, {0, 1, 0}, 45, CAMERA_PERSPECTIVE},
             Camera3D{{0, 3, 1}, {0, 0, 0}, {0, 1, 0}, 45, CAMERA_PERSPECTIVE}}) {
-        water::SceneValidation::capture(scene, view);
+        water::SceneValidation::capture(scene, view, context.boat());
         const auto target = water::SceneValidation::target(scene);
         WaterProbe probe(scene, view);
         for (const Vector3 point : {Vector3{0, 0.12f, 3.09f}, Vector3{100, 0, 0}}) {
@@ -505,7 +520,7 @@ TEST_CASE("appearance", refraction_rejects_rim_clear_and_screen_edges) {
     }
     // A narrow invalid texel on the ray segment must reject an otherwise valid destination.
     const Camera3D overhead{{0, 8, 0}, {0, 0, 0}, {0, 0, -1}, 45, CAMERA_PERSPECTIVE};
-    water::SceneValidation::capture(scene, overhead);
+    water::SceneValidation::capture(scene, overhead, context.boat());
     const auto target = water::SceneValidation::target(scene);
     WaterProbe probe(scene, overhead);
     std::vector<unsigned char> colors(840 * 560 * 4, 255);
@@ -594,7 +609,7 @@ TEST_CASE("appearance", capture_contains_only_submerged_stone) {
     water::SceneRenderer scene(small_config());
     CHECK(scene.resize(840, 560));
     BeginDrawing();
-    water::SceneValidation::capture(scene, camera);
+    water::SceneValidation::capture(scene, camera, context.boat());
     const auto target = water::SceneValidation::target(scene);
     for (const Vector3 point : {Vector3{0, -1, 0}, Vector3{-1, -1, -1}, Vector3{0, -0.5f, -3}}) {
         const auto pixel = sample_world(target, point);
@@ -614,14 +629,14 @@ TEST_CASE("appearance", capture_contains_only_submerged_stone) {
     CHECK(foreground.color[3] == 0);
     CHECK(foreground.depth < expected_depth(occluded) - 0.00005f);
     const Camera3D overhead{{0, 12, 0}, {0, 0, 0}, {0, 0, -1}, 45, CAMERA_PERSPECTIVE};
-    water::SceneValidation::capture(scene, overhead);
+    water::SceneValidation::capture(scene, overhead, context.boat());
     for (const Vector3 point : {Vector3{-1.7f, -1, -2.7f}, Vector3{1.7f, -1, 2.7f}}) {
         const auto pixel = sample_world(target, point, overhead);
         CHECK(pixel.color[3] == 255);
         CHECK_NEAR(pixel.depth, expected_depth(point, overhead), 0.00002f);
     }
     const Camera3D grazing{{0, 1, 8}, {0, -0.4f, 0}, {0, 1, 0}, 45, CAMERA_PERSPECTIVE};
-    water::SceneValidation::capture(scene, grazing);
+    water::SceneValidation::capture(scene, grazing, context.boat());
     const auto blocked_floor = sample_world(target, {0, -1, 0}, grazing);
     CHECK(blocked_floor.color[3] == 255);
     CHECK(blocked_floor.depth < expected_depth({0, -1, 0}, grazing) - 0.00005f);
@@ -680,8 +695,12 @@ TEST_CASE("appearance", constructor_failures_release_meshes_and_shaders) {
     for (const auto fault : {water::AppearanceFault::stone_shader, water::AppearanceFault::water_shader,
                             water::AppearanceFault::basin_mesh, water::AppearanceFault::grass_shader,
                             water::AppearanceFault::grass_mesh}) {
+        glUseProgram(rlGetShaderIdDefault());
         water::appearance_fault = fault;
         CHECK_THROWS(water::SceneRenderer(small_config()), std::runtime_error);
+        GLint program = 0;
+        glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+        CHECK(program == rlGetShaderIdDefault());
         const auto handles = water::appearance_handles;
         CHECK(!glIsProgram(handles.stone_shader));
         CHECK(!glIsProgram(handles.water_shader));
@@ -693,9 +712,28 @@ TEST_CASE("appearance", constructor_failures_release_meshes_and_shaders) {
         CHECK(!glIsBuffer(handles.normals));
         water::appearance_fault = water::AppearanceFault::none;
         water::SceneRenderer recovered(small_config());
+        glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+        CHECK(program == rlGetShaderIdDefault());
         CHECK(recovered.resize(640, 480));
         CHECK(glGetError() == GL_NO_ERROR);
     }
+}
+
+TEST_CASE("appearance", constructor_restores_caller_program) {
+    Context context;
+    for (const auto caller : {0u, rlGetShaderIdDefault()}) {
+        glUseProgram(caller);
+        {
+            water::SceneRenderer scene(small_config());
+            GLint program = 0;
+            glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+            CHECK(program == caller);
+        }
+        GLint program = 0;
+        glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+        CHECK(program == caller);
+    }
+    CHECK(glGetError() == GL_NO_ERROR);
 }
 
 TEST_CASE("appearance", capture_restores_caller_depth_masks_framebuffer_and_viewport) {
@@ -710,7 +748,7 @@ TEST_CASE("appearance", capture_restores_caller_depth_masks_framebuffer_and_view
     glDepthMask(GL_FALSE);
     glColorMask(GL_TRUE, GL_FALSE, GL_TRUE, GL_FALSE);
     glEnable(GL_DEPTH_TEST);
-    water::SceneValidation::capture(scene, camera);
+    water::SceneValidation::capture(scene, camera, context.boat());
     GLint value = 0, viewport[4]{};
     GLboolean masks[4]{}, depth_mask = GL_TRUE;
     glGetIntegerv(GL_DEPTH_FUNC, &value); CHECK(value == GL_GREATER);
@@ -726,7 +764,7 @@ TEST_CASE("appearance", capture_restores_caller_depth_masks_framebuffer_and_view
     glViewport(0, 0, GetRenderWidth(), GetRenderHeight());
     glDepthFunc(GL_LEQUAL); glDepthMask(GL_TRUE); glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDisable(GL_DEPTH_TEST);
-    water::SceneValidation::capture(scene, camera);
+    water::SceneValidation::capture(scene, camera, context.boat());
     glGetIntegerv(GL_DEPTH_FUNC, &value); CHECK(value == GL_LEQUAL);
     CHECK(!glIsEnabled(GL_DEPTH_TEST));
     EndDrawing();
@@ -744,7 +782,7 @@ TEST_CASE("appearance", capture_and_main_projection_align_at_drawable_sizes) {
     for (const auto size : {std::array<int, 2>{840, 560}, {1260, 840}, {900, 900}}) {
         CHECK(scene.resize(size[0], size[1]));
         BeginDrawing();
-        scene.draw(camera, water, {}, 0, 0.5f);
+        scene.draw(camera, water, context.boat(), {}, 0, 0.5f);
         const auto a = water::SceneValidation::capture_projection(scene), b = water::SceneValidation::projection(scene);
         CHECK_NEAR(a.m0, b.m0, 1e-6f); CHECK_NEAR(a.m5, b.m5, 1e-6f);
         CHECK_NEAR(a.m0 / a.m5, 560.0f / 840, 1e-6f);
@@ -796,7 +834,7 @@ TEST_CASE("appearance", capture_orientation_and_hidpi_projection_match_known_flo
         CHECK(GetScreenWidth() == 840 && GetScreenHeight() == 560);
         CHECK(scene.resize(size[0], size[1]));
         BeginDrawing();
-        water::SceneValidation::capture(scene, view);
+        water::SceneValidation::capture(scene, view, context.boat());
         const auto target = water::SceneValidation::target(scene);
         for (int i = 0; i < 3; ++i) {
             const auto point = points[i];
@@ -844,7 +882,7 @@ TEST_CASE("appearance", controller_pause_resume_and_reset_preserve_scene_clock) 
     const auto capture = [&](const char* path) {
         water.update(simulation);
         BeginDrawing();
-        scene.draw(camera, water, app.drops(), app.sim_time(), 0.5f);
+        scene.draw(camera, water, context.boat(), app.drops(), app.sim_time(), 0.5f);
         std::vector<unsigned char> pixels(840 * 560 * 4);
         glReadPixels(0, 0, 840, 560, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
         const auto image = LoadImageFromScreen();
@@ -941,7 +979,7 @@ TEST_CASE("appearance", rendered_acceptance_matrix) {
         }
         water.update(simulation);
         BeginDrawing();
-        scene.draw(view, water, app.drops(), scenario.time, scenario.mix);
+        scene.draw(view, water, context.boat(), app.drops(), scenario.time, scenario.mix);
         const auto image = LoadImageFromScreen();
         const auto path = std::string("pool-captures/") + scenario.name + ".png";
         CHECK(image.width == scenario.width && image.height == scenario.height);
@@ -988,7 +1026,7 @@ TEST_CASE("appearance", live_depth_replaces_only_basin_and_retains_old_geometry_
         scene.set_depth(depth);
         CHECK(water::SceneValidation::basin_mesh(scene).vaoId == basin);
         BeginDrawing();
-        water::SceneValidation::capture(scene, overhead);
+        water::SceneValidation::capture(scene, overhead, context.boat());
         const Vector3 point{0, -depth, 0};
         const auto pixel = sample_world(target, point, overhead);
         CHECK(pixel.color[3] == 255);
@@ -1007,7 +1045,7 @@ TEST_CASE("appearance", grass_surrounds_coping_without_covering_pool_or_capture)
     water::SceneRenderer scene(config);
     CHECK(scene.resize(840, 560));
     BeginDrawing();
-    scene.draw(camera, renderer, {}, 0, 0);
+    scene.draw(camera, renderer, context.boat(), {}, 0, 0);
     RenderTexture2D screen{};
     screen.texture.width = 840;
     screen.texture.height = 560;
@@ -1062,7 +1100,7 @@ TEST_CASE("appearance", deep_floor_capture_remains_visible_at_drawable_scales) {
         for (const auto size : {std::array<int, 2>{840, 560}, {1260, 840}}) {
             CHECK(scene.resize(size[0], size[1]));
             BeginDrawing();
-            water::SceneValidation::capture(scene, overhead);
+            water::SceneValidation::capture(scene, overhead, context.boat());
             const auto target = water::SceneValidation::target(scene);
             const Vector3 point{0, -depth, 0};
             const auto floor = sample_world(target, point, overhead);
