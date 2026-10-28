@@ -26,13 +26,31 @@ void sustained_rain(int nx, int ny, float depth = 3, float rate = 120, float dam
     water::AppController app(simulation, config);
     double max_mean = 0;
     float peak = 0, preceding_envelope = 0, final_envelope = 0;
+    float distance_from_spawn = 0;
+    bool reversed = false;
 
     for (int second = 1; second <= 120; ++second) {
-        const float yaw = second * .2f;
-        water::upload_boat(simulation, {10, 6, yaw, .75f * std::cos(yaw), .75f * std::sin(yaw), 0});
+        const int phase = (second - 1) % 32;
+        water::BoatControl control;
+        if (phase < 12) control = {1, 0};
+        else if (phase < 20) control = {1, .55f};
+        else if (phase < 28) control = {-1, -.65f};
+        else control = {1, -1};
         for (int tick = 0; tick < 120; ++tick)
             app.frame(water::FixedClock::quantum, false, true, config.rain_rate,
-                      config.impact_strength, config.damping, view());
+                      config.impact_strength, config.damping, view(), control);
+        const auto boat = water::download_boat(simulation);
+        for (float value : {boat.x, boat.z, boat.yaw, boat.vx, boat.vz, boat.yaw_rate})
+            CHECK(std::isfinite(value));
+        const float extent_x = .5f * (water::boat_geometry.length * std::abs(std::cos(boat.yaw)) +
+                                      water::boat_geometry.beam * std::abs(std::sin(boat.yaw)));
+        const float extent_z = .5f * (water::boat_geometry.length * std::abs(std::sin(boat.yaw)) +
+                                      water::boat_geometry.beam * std::abs(std::cos(boat.yaw)));
+        CHECK(boat.x >= extent_x && boat.x <= config.grid.lx - extent_x);
+        CHECK(boat.z >= extent_z && boat.z <= config.grid.lz - extent_z);
+        CHECK(std::hypot(boat.vx, boat.vz) <= 1.50001f);
+        distance_from_spawn = std::max(distance_from_spawn, std::hypot(boat.x - 10, boat.z - 6));
+        reversed |= boat.vx * std::cos(boat.yaw) + boat.vz * std::sin(boat.yaw) < -.1f;
         const auto state = water::download(simulation);
         for (const auto* values : {&state.eta, &state.u, &state.v})
             for (float value : *values) CHECK(std::isfinite(value));
@@ -51,6 +69,8 @@ void sustained_rain(int nx, int ny, float depth = 3, float rate = 120, float dam
     }
 
     CHECK_NEAR(app.sim_time(), 120.0, 1e-12);
+    CHECK(distance_from_spawn > 1);
+    CHECK(reversed);
     CHECK(peak > 0.001f * config.depth);
     CHECK(final_envelope <= 2 * preceding_envelope);
     std::cout << "SOAK " << nx << 'x' << ny << " seconds=120 rain=" << rate << "/s H=" << depth << " damping=" << damping << " seed=1"

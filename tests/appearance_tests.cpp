@@ -1113,3 +1113,83 @@ TEST_CASE("appearance", deep_floor_capture_remains_visible_at_drawable_scales) {
     }
     CHECK(glGetError() == GL_NO_ERROR);
 }
+
+TEST_CASE("appearance", driven_real_boat_contacts_and_escapes_every_wall_and_corner) {
+    Context context;
+    water::Config config;
+    config.grid = {64, 48, 4, 3};
+    config.impact_radius = .4f;
+    config.impact_strength = .005f;
+    config.depth = .25f;
+    water::Simulation simulation(config);
+    water::AppController app(simulation, config);
+    water::WaterRenderer renderer(config.grid);
+    water::BoatRenderer boat(config.grid);
+    water::SceneRenderer scene(config);
+    CHECK(scene.resize(840, 560));
+    std::filesystem::create_directories("boat-captures");
+    const water::BoatState starts[]{
+        {3.65f,1.5f,0,0,0,0}, {.35f,1.5f,3.14159265f,0,0,0},
+        {2,2.65f,1.57079633f,0,0,0}, {2,.35f,-1.57079633f,0,0,0},
+        {3.65f,2.65f,.78539816f,0,0,0}, {.35f,2.65f,2.35619449f,0,0,0},
+        {.35f,.35f,-2.35619449f,0,0,0}, {3.65f,.35f,-.78539816f,0,0,0}};
+    auto capture = [&](const char* name, const water::BoatState& state, bool overview) {
+        const Vector3 target{state.x - 2, 0, state.z - 1.5f};
+        const Camera3D close{{target.x+.42f,.40f,target.z+.52f},target,{0,1,0},42,CAMERA_PERSPECTIVE};
+        const Camera3D full{{4.5f,5.5f,6},{0,0,0},{0,1,0},42,CAMERA_PERSPECTIVE};
+        renderer.update(simulation);
+        boat.update(simulation);
+        BeginDrawing();
+        scene.draw(overview ? full : close, renderer, boat, {}, app.sim_time(), .7f);
+        const Image image = LoadImageFromScreen();
+        CHECK(image.data && image.width == 840 && image.height == 560);
+        CHECK(ExportImage(image, name));
+        UnloadImage(image);
+        EndDrawing();
+        CHECK(glGetError() == GL_NO_ERROR);
+    };
+    capture("boat-captures/stationary-close.png", water::download_boat(simulation), false);
+    capture("boat-captures/stationary-basin.png", water::download_boat(simulation), true);
+    const water::SpawnView spawn_view{camera, 1.5f};
+    for (int tick = 0; tick < 120; ++tick)
+        app.frame(water::FixedClock::quantum, false, false, 0, .005f, 2.5f, spawn_view, {1, 0});
+    capture("boat-captures/forward-wake.png", water::download_boat(simulation), false);
+    for (int tick = 0; tick < 360; ++tick)
+        app.frame(water::FixedClock::quantum, false, false, 0, .005f, 2.5f, spawn_view, {-1, 0});
+    capture("boat-captures/reverse-wake.png", water::download_boat(simulation), false);
+    for (int tick = 0; tick < 600; ++tick)
+        app.frame(water::FixedClock::quantum, false, false, 0, .005f, 2.5f, spawn_view, {1, 1});
+    capture("boat-captures/shallow-sustained-turn.png", water::download_boat(simulation), false);
+    for (int index = 0; index < 8; ++index) {
+        app.reset();
+        water::upload_boat(simulation, starts[index]);
+        for (int tick = 0; tick < 240; ++tick)
+            app.frame(water::FixedClock::quantum, false, false, 0, .005f, 2.5f,
+                      spawn_view, {1, 0});
+        const auto contact = water::download_boat(simulation);
+        const float advance = (contact.x-starts[index].x)*std::cos(starts[index].yaw) +
+                              (contact.z-starts[index].z)*std::sin(starts[index].yaw);
+        CHECK(advance > .05f && advance < .5f);
+        capture(TextFormat("boat-captures/contact-%d.png", index), contact, false);
+        for (int tick = 0; tick < 300; ++tick)
+            app.frame(water::FixedClock::quantum, false, false, 0, .005f, 2.5f,
+                      spawn_view, {-1, .4f});
+        const auto escaped = water::download_boat(simulation);
+        const float retreat = (contact.x-escaped.x)*std::cos(starts[index].yaw) +
+                              (contact.z-escaped.z)*std::sin(starts[index].yaw);
+        CHECK(retreat > .25f);
+        CHECK(std::abs(escaped.yaw - contact.yaw) > .05f);
+        capture(TextFormat("boat-captures/escape-%d.png", index), escaped, false);
+    }
+    const auto before_pause = water::download_boat(simulation);
+    app.frame(1, true, true, 120, .005f, 10, spawn_view, {1, 1});
+    const auto paused = water::download_boat(simulation);
+    CHECK(before_pause.x == paused.x && before_pause.z == paused.z && before_pause.yaw == paused.yaw);
+    app.set_depth(.5f);
+    scene.set_depth(.5f);
+    app.reset();
+    const auto reset = water::download_boat(simulation);
+    CHECK(reset.x == 2 && reset.z == 1.5f && reset.vx == 0 && reset.vz == 0);
+    CHECK(simulation.config().depth == .5f);
+    capture("boat-captures/depth-reset.png", reset, false);
+}

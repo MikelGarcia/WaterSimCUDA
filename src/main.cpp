@@ -105,6 +105,10 @@ void demo(const water::Config& config) {
     const double duration = validation_seconds("WATER_VALIDATE_SECONDS", 0);
     const double warmup = validation_seconds("WATER_VALIDATE_WARMUP", 10);
     const char* capture = std::getenv("WATER_VALIDATE_CAPTURE");
+    const char* drive_value = std::getenv("WATER_VALIDATE_DRIVE");
+    const bool drive = drive_value && std::string_view(drive_value) == "1";
+    if (drive_value && !drive)
+        throw std::invalid_argument("WATER_VALIDATE_DRIVE must be 1 when specified");
     Window window;
     water::select_gl_cuda_device();
     water::Simulation simulation(config);
@@ -192,9 +196,17 @@ void demo(const water::Config& config) {
         }
         timer.begin(simulation.stream());
         const double old_time = app.sim_time();
-        const water::BoatControl control{
+        water::BoatControl control{
             float(IsKeyDown(KEY_W) - IsKeyDown(KEY_S)),
             float(IsKeyDown(KEY_D) - IsKeyDown(KEY_A))};
+        if (drive) {
+            const auto tick = static_cast<std::uint64_t>(std::llround(app.sim_time() * 120));
+            const auto phase = tick % (32 * 120);
+            if (phase < 12 * 120) control = {1, 0};
+            else if (phase < 20 * 120) control = {1, .55f};
+            else if (phase < 28 * 120) control = {-1, -.65f};
+            else control = {1, -1};
+        }
         app.frame(elapsed, paused, rain, rate, strength, damping, spawn_view, control);
         timer.end(simulation.stream(), app.sim_time() != old_time);
         renderer.update(simulation);
@@ -235,9 +247,9 @@ void demo(const water::Config& config) {
         const double mean = std::accumulate(frame_ms.begin(), frame_ms.end(), 0.0) / frame_ms.size();
         std::sort(frame_ms.begin(), frame_ms.end());
         const double p95 = frame_ms[static_cast<std::size_t>(0.95 * (frame_ms.size() - 1))];
-        std::printf("VALIDATION %dx%d warmup=%.1fs samples=%zu mean=%.3fms p95=%.3fms fps=%.2f gpu_last=%.3fms\n",
+        std::printf("VALIDATION %dx%d warmup=%.1fs samples=%zu mean=%.3fms p95=%.3fms fps=%.2f gpu_last=%.3fms drive=%s\n",
                     config.grid.nx, config.grid.ny, warmup, frame_ms.size(), mean, p95, 1000 / mean,
-                    timer.milliseconds());
+                    timer.milliseconds(), drive ? "on" : "off");
     }
 }
 

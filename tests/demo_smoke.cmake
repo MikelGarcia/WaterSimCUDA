@@ -15,7 +15,7 @@ foreach(mix IN ITEMS 0 1)
     file(REMOVE "${capture}")
     execute_process(
         COMMAND "${CMAKE_COMMAND}" -E env
-            WATER_VALIDATE_SECONDS=1 WATER_VALIDATE_WARMUP=0
+            WATER_VALIDATE_SECONDS=1 WATER_VALIDATE_WARMUP=0 WATER_VALIDATE_DRIVE=1
             "WATER_VALIDATE_CAPTURE=${capture}" "${DEMO}" --reflection "${mix}"
         WORKING_DIRECTORY "${SMOKE_DIR}"
         RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE errors
@@ -23,7 +23,7 @@ foreach(mix IN ITEMS 0 1)
     if(NOT result EQUAL 0)
         message(FATAL_ERROR "Desktop demo failed (${result}):\n${output}\n${errors}")
     endif()
-    if(NOT output MATCHES "VALIDATION 512x512")
+    if(NOT output MATCHES "VALIDATION 512x512" OR NOT output MATCHES "drive=on")
         message(FATAL_ERROR "Desktop demo did not finish its frame samples:\n${output}")
     endif()
     if(NOT EXISTS "${capture}")

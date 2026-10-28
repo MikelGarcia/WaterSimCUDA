@@ -1,6 +1,6 @@
 # WaterSimCUDA
 
-A Windows C++17/CUDA shallow-water basin rendered with raylib and OpenGL 3.3. CUDA owns the water state and writes the shared mesh buffers. Falling drops trigger volume-balanced ripples; the simulation uses fixed stable substeps and a bounded catch-up clock.
+A Windows C++17/CUDA shallow-water basin with a GPU driven 0.30 m RC boat, rendered with raylib and OpenGL 3.3. CUDA owns the water state and writes the shared mesh buffers. Falling drops trigger volume-balanced ripples; the simulation uses fixed stable substeps and a bounded catch-up clock.
 
 Build with a supported MSVC/CUDA pair, CMake, an NVIDIA GPU, and a desktop session. See [the checked build environment](docs/build-environment.md) for exact versions, environment setup, and the pinned raylib offline override.
 
@@ -16,6 +16,8 @@ Keep the generated `assets` directory beside the executable. Launching from anot
 
 | Control | Action |
 | --- | --- |
+| W / S | Forward / reverse; opposite throttle brakes before reversing |
+| A / D | Rudder; reverse motion reverses the turn |
 | Left click on water | Drop at the selected point |
 | Right drag / wheel | Orbit / zoom, including while paused |
 | Space | Pause or resume water, drops, and clouds |
@@ -34,7 +36,7 @@ Rain samples a finite camera-local region covering the pool and nearby ground. T
 
 The overlay uses fixed status columns and reports render FPS plus the mean completed CUDA simulation duration over the trailing second, refreshed at most once per second and held between updates. An empty timing window displays zero at the next refresh. Timing queries do not wait for unfinished samples. A stalled frame advances at most eight 1/120 s quanta; simulated time slows under overload. There is no CPU water fallback.
 
-The desktop smoke test opens bounded real windows at both mix endpoints, renders from a different working directory, and exports captures under `build-desktop/demo-smoke/captures`. For longer validation, set `WATER_VALIDATE_SECONDS` to the sample duration and `WATER_VALIDATE_WARMUP` to warm-up seconds (default 10). The application closes automatically and prints frame mean/p95 and FPS. Optional `WATER_VALIDATE_CAPTURE` gives an image output path; this explicitly downloads the framebuffer only after sampling. For example, from PowerShell:
+The desktop smoke test opens bounded real windows at both mix endpoints, renders from a different working directory, and exports captures under `build-desktop/demo-smoke/captures`. For longer validation, set `WATER_VALIDATE_SECONDS` to the sample duration and `WATER_VALIDATE_WARMUP` to warm-up seconds (default 10). The application closes automatically and prints frame mean/p95 and FPS. Set `WATER_VALIDATE_DRIVE=1` for a repeating 32 simulated second schedule of forward, turn, braking/reverse and escape controls, sampled by simulation tick; this submits controls without reading boat state. Optional `WATER_VALIDATE_CAPTURE` gives an image output path; this explicitly downloads the framebuffer only after sampling. For example, from PowerShell:
 
 ```powershell
 $env:WATER_VALIDATE_SECONDS = '60'
