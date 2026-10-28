@@ -203,10 +203,10 @@ SceneRenderer::SceneRenderer(const Config& config) : config_(config) {
         for (int ring = 0; ring < rings; ++ring)
         for (int segment = 0; segment < segments; ++segment) {
             if (ring > 0) {
-                vertex(ring, segment); vertex(ring, segment + 1); vertex(ring + 1, segment);
+                vertex(ring, segment); vertex(ring + 1, segment); vertex(ring, segment + 1);
             }
             if (ring < rings - 1) {
-                vertex(ring, segment + 1); vertex(ring + 1, segment + 1); vertex(ring + 1, segment);
+                vertex(ring, segment + 1); vertex(ring + 1, segment); vertex(ring + 1, segment + 1);
             }
         }
         UploadMesh(&drop_, false);

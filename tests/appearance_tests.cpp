@@ -230,6 +230,30 @@ TEST_CASE("appearance", drop_mesh_obeys_spawn_bounds) {
     }
 }
 
+TEST_CASE("appearance", drop_mesh_faces_point_outward) {
+    Context context;
+    water::SceneRenderer scene(small_config());
+    const auto& mesh = water::SceneValidation::drop_mesh(scene);
+    CHECK(mesh.vertices && mesh.normals && mesh.triangleCount > 100);
+    CHECK(mesh.vertexCount == 3 * mesh.triangleCount);
+    int checked = 0;
+    for (int triangle = 0; triangle < mesh.triangleCount; ++triangle) {
+        const float* a = mesh.vertices + 9 * triangle;
+        const Vector3 ab{a[3] - a[0], a[4] - a[1], a[5] - a[2]};
+        const Vector3 ac{a[6] - a[0], a[7] - a[1], a[8] - a[2]};
+        const Vector3 face{ab.y * ac.z - ab.z * ac.y,
+                           ab.z * ac.x - ab.x * ac.z,
+                           ab.x * ac.y - ab.y * ac.x};
+        if (face.x * face.x + face.y * face.y + face.z * face.z <= 1e-20f) continue;
+        ++checked;
+        for (int vertex = 0; vertex < 3; ++vertex) {
+            const float* normal = mesh.normals + 9 * triangle + 3 * vertex;
+            CHECK(face.x * normal[0] + face.y * normal[1] + face.z * normal[2] > 0);
+        }
+    }
+    CHECK(checked == mesh.triangleCount);
+}
+
 TEST_CASE("appearance", drop_rendering_uses_stored_flight) {
     Context context;
     auto config = small_config();
