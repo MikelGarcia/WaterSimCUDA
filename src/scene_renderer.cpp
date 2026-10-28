@@ -191,6 +191,14 @@ SceneRenderer::SceneRenderer(const Config& config) : config_(config) {
         appearance_handles.grass_shader = grass_shader_.id;
 #endif
         SCENE_CHECKPOINT(grass_shader);
+        const auto grass_path = std::filesystem::path(GetApplicationDirectory()) / "assets" / "grass.png";
+        grass_texture_ = LoadTexture(grass_path.string().c_str());
+        if (!grass_texture_.id)
+            throw std::runtime_error("could not load grass texture: " + grass_path.string());
+        GenTextureMipmaps(&grass_texture_);
+        SetTextureFilter(grass_texture_, TEXTURE_FILTER_TRILINEAR);
+        SetTextureWrap(grass_texture_, TEXTURE_WRAP_REPEAT);
+        grass_shader_.locs[SHADER_LOC_MAP_DIFFUSE] = required_uniform(grass_shader_, "texture0", "grass.fs");
         const float hx = config.grid.lx / 2 + .18f, hz = config.grid.lz / 2 + .18f;
         const float outer = static_cast<float>(rlGetCullDistanceFar()) + 4 * std::max(config.grid.lx, config.grid.lz);
         const float rectangles[][4] = {{-outer,-outer,-hx,outer}, {hx,-outer,outer,outer},
@@ -435,7 +443,7 @@ void SceneRenderer::draw(const Camera3D& camera, const WaterRenderer& water,
     projection_ = rlGetMatrixProjection();
     MaterialMap ground_maps[MAX_MATERIAL_MAPS]{};
     ground_maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
-    ground_maps[MATERIAL_MAP_DIFFUSE].texture.id = rlGetTextureIdDefault();
+    ground_maps[MATERIAL_MAP_DIFFUSE].texture = grass_texture_;
     Material ground{};
     ground.shader = grass_shader_;
     ground.maps = ground_maps;
@@ -484,6 +492,7 @@ void SceneRenderer::release() noexcept {
     UnloadMesh(basin_);
     UnloadMesh(drop_);
     UnloadMesh(grass_);
+    if (grass_texture_.id) UnloadTexture(grass_texture_);
     if (grass_shader_.id) UnloadShader(grass_shader_);
     if (stone_shader_.id) UnloadShader(stone_shader_);
     if (water_shader_.id) UnloadShader(water_shader_);
@@ -494,6 +503,7 @@ void SceneRenderer::release() noexcept {
     drop_ = {};
     grass_ = {};
     grass_shader_ = {};
+    grass_texture_ = {};
     stone_shader_ = {};
     water_shader_ = {};
     sky_shader_ = {};

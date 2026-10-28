@@ -37,6 +37,7 @@ private:
     Mesh drop_{};
     Mesh grass_{};
     Shader grass_shader_{};
+    Texture2D grass_texture_{};
     Shader stone_shader_{};
     Shader water_shader_{};
     Shader sky_shader_{};

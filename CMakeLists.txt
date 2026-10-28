@@ -53,6 +53,7 @@ if(WATER_BUILD_DEMO)
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/basin.vs"
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/basin.fs"
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/grass.fs"
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/grass.png"
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/drop.fs"
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/sky.fs"
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/sky.glsl"
