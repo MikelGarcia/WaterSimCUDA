@@ -246,7 +246,7 @@ void Simulation::reset() {
 
 void Simulation::step(float dt, float damping) {
     if (!std::isfinite(dt) || dt <= 0.0f || dt > max_dt_) {
-        throw std::invalid_argument("step dt must be finite, positive, and within the startup CFL bound");
+        throw std::invalid_argument("step dt must be finite, positive, and within the current CFL bound");
     }
     if (!std::isfinite(damping) || damping < 0.0f) {
         throw std::invalid_argument("step damping must be finite and nonnegative");
