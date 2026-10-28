@@ -16,7 +16,8 @@ water::Config parse(std::initializer_list<const char*> arguments) {
 } // namespace
 
 TEST_CASE("config", reflection_option_accepts_endpoints_and_rejects_invalid_values) {
-    CHECK_NEAR(parse({}).reflection, 0.5f, 1e-6f);
+    CHECK_NEAR(parse({}).reflection, 0.7f, 1e-6f);
+    CHECK_NEAR(1 - parse({}).reflection, 0.3f, 1e-6f);
     for (const char* value : {"0", "0.5", "1"}) {
         CHECK_NEAR(parse({"--reflection", value}).reflection, std::stof(value), 1e-6f);
     }
@@ -27,6 +28,8 @@ TEST_CASE("config", reflection_option_accepts_endpoints_and_rejects_invalid_valu
 }
 
 TEST_CASE("config", reflection_adjustment_uses_bounded_five_percent_steps) {
+    CHECK_NEAR(water::adjust_reflection(parse({}).reflection, 1), 0.75f, 1e-6f);
+    CHECK_NEAR(water::adjust_reflection(parse({}).reflection, -1), 0.65f, 1e-6f);
     CHECK_NEAR(water::adjust_reflection(0, 1), 0.05f, 1e-6f);
     CHECK_NEAR(water::adjust_reflection(1, -1), 0.95f, 1e-6f);
     CHECK(water::adjust_reflection(0, -1) == 0);

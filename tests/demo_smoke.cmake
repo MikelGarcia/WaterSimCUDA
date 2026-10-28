@@ -4,7 +4,9 @@ if(NOT EXISTS "${demo_dir}/assets/grass.png")
     message(FATAL_ERROR "Desktop demo is missing its grass texture")
 endif()
 execute_process(COMMAND "${DEMO}" --help OUTPUT_VARIABLE help RESULT_VARIABLE result)
-if(NOT result EQUAL 0 OR NOT help MATCHES "--reflection" OR NOT help MATCHES "reflection.*refraction")
+if(NOT result EQUAL 0 OR NOT help MATCHES "--reflection" OR NOT help MATCHES "reflection.*refraction"
+   OR NOT help MATCHES "--reflection 0.7"
+   OR NOT help MATCHES "[+] / - reflection/refraction")
     message(FATAL_ERROR "Desktop demo help does not explain reflection/refraction controls:\n${help}")
 endif()
 foreach(mix IN ITEMS 0 1)

@@ -325,7 +325,7 @@ TEST_CASE("appearance", drop_rendering_uses_stored_flight) {
     glReadPixels(px-10, py-12, 20, 24, GL_RGBA, GL_UNSIGNED_BYTE, empty.data());
     CHECK(visible == empty);
     EndDrawing();
-    CHECK(MeasureText("Up/Down: rain   Left/Right: strength   [/]: damping   ,/.: reflection   Esc: close", 14) <= 784);
+    CHECK(MeasureText("Up/Down: rain   Left/Right: strength   [/]: damping   +/-: reflection   Esc: close", 14) <= 784);
     app.reset();
     CHECK(app.sim_time() == 0 && app.drops().empty());
     CHECK(glGetError() == GL_NO_ERROR);

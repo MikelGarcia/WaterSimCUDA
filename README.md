@@ -24,11 +24,11 @@ Keep the generated `assets` directory beside the executable. Launching from anot
 | Up / Down | Rain rate ±1 drop/s, clamped to 0–120 |
 | Left / Right | Impact strength ±0.001 m, clamped to 0–0.02 × depth |
 | [ / ] | Damping ±0.05/s, clamped to 0–10/s |
-| , / . | Reflection weight −/+0.05, clamped to 0–1 |
+| + / - | Increase / decrease reflection by 0.05, clamped to 0–1; refraction = 1 − reflection |
 | ( / ) | Decrease / increase physical depth by 0.25 m; interactive minimum 0.25 m |
 | Escape | Close |
 
-`water_demo --help` lists startup options with units and defaults. The default grid is 512 × 512 in a 20 m × 12 m basin, depth 3 m, damping 2.5/s, impact radius 0.35 m, strength 0.01 m, rain 30/s, seed 1. `--reflection` defaults to 0.5: equal reflected sky and refracted stone. Zero selects only refraction, one selects only reflection. Grid sizes are 8–2048 per axis. Radius must span at least two cell widths and stay below one quarter of the shorter basin dimension. Startup damping accepts any finite nonnegative value; bracket controls use the range above.
+`water_demo --help` lists startup options with units and defaults. The default grid is 512 × 512 in a 20 m × 12 m basin, depth 3 m, damping 2.5/s, impact radius 0.35 m, strength 0.01 m, rain 30/s, seed 1. `--reflection` defaults to 0.7: 70% reflected sky and 30% refracted stone. Reflection and refraction always sum to 100%. Zero selects only refraction, one selects only reflection. Grid sizes are 8–2048 per axis. Radius must span at least two cell widths and stay below one quarter of the shorter basin dimension. Startup damping accepts any finite nonnegative value; bracket controls use the range above.
 
 Rain samples a finite camera-local region covering the pool and nearby ground. The total 0–120 drops/s rate is shared across both: water arrivals create ripples, while grass arrivals disappear at ground level without waves, wet grass or splashes. Active flights keep their positions, spawn heights and arrival times when depth changes. Changing depth updates wave speed without clearing water state; lowering it also clamps impact strength to 0.02 × depth. Startup `--depth` accepts any finite positive depth that satisfies the other configuration limits, including values below the interactive minimum.
 

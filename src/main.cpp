@@ -146,6 +146,10 @@ void demo(const water::Config& config) {
             throw std::runtime_error("could not allocate refraction render target");
 
         for (int character = GetCharPressed(); character; character = GetCharPressed()) {
+            if (character == '+' || character == '-') {
+                reflection = water::adjust_reflection(reflection, character == '+' ? 1 : -1);
+                continue;
+            }
             if (character != '(' && character != ')') continue;
             auto next = simulation.config();
             next.depth = water::adjust_depth(next.depth, character == '(' ? -1 : 1);
@@ -168,8 +172,6 @@ void demo(const water::Config& config) {
         if (IsKeyPressed(KEY_LEFT)) strength = std::max(0.0f, strength - 0.001f);
         if (IsKeyPressed(KEY_RIGHT_BRACKET)) damping = std::clamp(damping + 0.05f, 0.0f, 10.0f);
         if (IsKeyPressed(KEY_LEFT_BRACKET)) damping = std::clamp(damping - 0.05f, 0.0f, 10.0f);
-        if (IsKeyPressed(KEY_COMMA)) reflection = water::adjust_reflection(reflection, -1);
-        if (IsKeyPressed(KEY_PERIOD)) reflection = water::adjust_reflection(reflection, 1);
         if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
             const auto delta = GetMouseDelta();
             yaw -= delta.x * 0.006f;
@@ -212,7 +214,7 @@ void demo(const water::Config& config) {
         DrawText(TextFormat("/ Refraction %3.0f%%", 100 * (1 - reflection)), 208, 114, 16, status_color);
         DrawText(TextFormat("Depth %.2f m   (/): depth", simulation.config().depth),
                  36, 140, 16, status_color);
-        DrawText("Up/Down: rain   Left/Right: strength   [/]: damping   ,/.: reflection   Esc: close",
+        DrawText("Up/Down: rain   Left/Right: strength   [/]: damping   +/-: reflection   Esc: close",
                  28, GetScreenHeight() - 32, 14, status_color);
         EndDrawing();
     }
@@ -243,9 +245,9 @@ void help() {
               "  --strength 0.01         impact displacement (m), [0, 0.02 * depth]\n"
               "  --rain-rate 30          random drops per second [0, 120]\n"
               "  --seed 1                random seed (unsigned integer)\n"
-              "  --reflection 0.5        reflection/refraction mix [0, 1]\n"
+              "  --reflection 0.7        reflection/refraction mix [0, 1]\n"
               "Space pause | R reset | T rain | arrows up/down rain, left/right strength\n"
-              "[ / ] damping | , / . reflection/refraction mix (-/+ 0.05)\n"
+              "[ / ] damping | + / - reflection/refraction mix (+/- 0.05)\n"
               "( / ) depth (-/+ 0.25 m, minimum 0.25 m)\n"
               "left click drop | right drag orbit | wheel zoom | Esc close");
 }
