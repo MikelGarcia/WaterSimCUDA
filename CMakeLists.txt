@@ -58,6 +58,11 @@ if(WATER_BUILD_DEMO)
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/sky.fs"
                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/sky.glsl"
                 "${WATER_ASSET_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${WATER_ASSET_DIR}/69ChrisCraftBoat"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/69ChrisCraftBoat/ChrisCraft.glb"
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/69ChrisCraftBoat/BLENDSWAP_LICENSE.txt"
+                "${WATER_ASSET_DIR}/69ChrisCraftBoat"
         VERBATIM)
     add_dependencies(water_demo water_assets)
 endif()
@@ -98,6 +103,11 @@ if(BUILD_TESTING)
         target_compile_definitions(water_appearance_tests PRIVATE WATER_APPEARANCE_VALIDATION)
         target_link_libraries(water_appearance_tests PRIVATE water_scene_renderer_validation water_controller)
         add_dependencies(water_appearance_tests water_assets)
+        add_executable(water_boat_asset_tests tests/test_main.cpp tests/boat_asset_tests.cpp)
+        target_link_libraries(water_boat_asset_tests PRIVATE raylib)
+        target_include_directories(water_boat_asset_tests PRIVATE src)
+        add_dependencies(water_boat_asset_tests water_assets)
+        add_test(NAME boat_asset COMMAND water_boat_asset_tests boat_asset)
         add_test(NAME appearance COMMAND water_appearance_tests appearance)
         set_tests_properties(appearance PROPERTIES TIMEOUT 60)
     endif()
