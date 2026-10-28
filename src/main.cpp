@@ -81,7 +81,8 @@ private:
 
 struct Window {
     Window() {
-        SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
+        // Keep event polling nonblocking so minimized frames can discard elapsed time.
+        SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_ALWAYS_RUN);
         InitWindow(1280, 800, "Water | CUDA shallow water");
         if (!IsWindowReady()) throw std::runtime_error("could not create OpenGL window");
         SetWindowMinSize(840, 560);
@@ -132,6 +133,16 @@ void demo(const water::Config& config) {
         if (duration > 0 && now - started >= warmup + duration) break;
         if (duration > 0 && now - started >= warmup) frame_ms.push_back(elapsed * 1000);
 
+        const int width = GetRenderWidth(), height = GetRenderHeight();
+        if (IsWindowMinimized() || width <= 0 || height <= 0) {
+            BeginDrawing();
+            EndDrawing();
+            previous = GetTime();
+            continue;
+        }
+        if (!scene.resize(width, height))
+            throw std::runtime_error("could not allocate refraction render target");
+
         if (IsKeyPressed(KEY_SPACE)) paused = !paused;
         if (IsKeyPressed(KEY_R)) app.reset();
         if (IsKeyPressed(KEY_T)) rain = !rain;
@@ -162,7 +173,6 @@ void demo(const water::Config& config) {
         app.frame(elapsed, paused, rain, rate, strength, damping, spawn_view);
         timer.end(simulation.stream(), app.sim_time() != old_time);
         renderer.update(simulation);
-        if (!scene.resize(GetRenderWidth(), GetRenderHeight())) continue;
 
         BeginDrawing();
         scene.draw(camera, renderer, app.drops(), app.sim_time(), config.reflection);
