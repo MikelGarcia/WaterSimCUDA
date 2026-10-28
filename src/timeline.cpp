@@ -111,8 +111,8 @@ std::vector<Impact> DropScheduler::tick(double end_time, bool rain_enabled, floa
     if (!std::isfinite(end_time) || end_time < time_) {
         throw std::invalid_argument("tick time must be finite and monotonic");
     }
-    if (!std::isfinite(rain_rate) || rain_rate < 0.0f || rain_rate > 60.0f) {
-        throw std::invalid_argument("rain rate must be in [0, 60]");
+    if (!std::isfinite(rain_rate) || rain_rate < 0.0f || rain_rate > 120.0f) {
+        throw std::invalid_argument("rain rate must be in [0, 120]");
     }
     if (!std::isfinite(strength) || strength < 0.0f || strength > 0.02f * config_.depth) {
         throw std::invalid_argument("impact strength must be in [0, 0.02 * depth]");

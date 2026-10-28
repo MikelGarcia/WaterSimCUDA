@@ -18,7 +18,7 @@ void sustained_rain(int nx, int ny) {
     config.grid = {nx, ny, 20.0f, 12.0f};
     config.impact_radius = 0.75f;
     config.impact_strength = 0.02f * config.depth;
-    config.rain_rate = 60.0f;
+    config.rain_rate = 120.0f;
     config.damping = 0.15f;
     config.seed = 1;
     water::Simulation simulation(config);
@@ -50,7 +50,7 @@ void sustained_rain(int nx, int ny) {
     CHECK_NEAR(app.sim_time(), 120.0, 1e-12);
     CHECK(peak > 0.001f * config.depth);
     CHECK(final_envelope <= 2 * preceding_envelope);
-    std::cout << "SOAK " << nx << 'x' << ny << " seconds=120 rain=60/s seed=1"
+    std::cout << "SOAK " << nx << 'x' << ny << " seconds=120 rain=120/s seed=1"
               << " max_abs_mean=" << max_mean << " peak=" << peak
               << " envelope_61_90=" << preceding_envelope
               << " envelope_91_120=" << final_envelope << '\n';

@@ -80,8 +80,8 @@ void validate(const Config& config) {
     if (!std::isfinite(config.damping) || config.damping < 0.0f) {
         throw std::invalid_argument("--damping must be finite and nonnegative");
     }
-    if (!std::isfinite(config.rain_rate) || config.rain_rate < 0.0f || config.rain_rate > 60.0f) {
-        throw std::invalid_argument("--rain-rate must be finite and in [0, 60]");
+    if (!std::isfinite(config.rain_rate) || config.rain_rate < 0.0f || config.rain_rate > 120.0f) {
+        throw std::invalid_argument("--rain-rate must be finite and in [0, 120]");
     }
     if (!std::isfinite(config.impact_strength) || config.impact_strength < 0.0f ||
         config.impact_strength > 0.02f * config.depth) {

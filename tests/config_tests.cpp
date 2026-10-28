@@ -44,10 +44,10 @@ TEST_CASE("config", defaults_are_valid) {
     CHECK_NEAR(config.grid.lz, 12.0f, 1e-6f);
     CHECK_NEAR(config.depth, 3.0f, 1e-6f);
     CHECK_NEAR(config.gravity, 9.81f, 1e-6f);
-    CHECK_NEAR(config.damping, 0.15f, 1e-6f);
+    CHECK_NEAR(config.damping, 2.5f, 1e-6f);
     CHECK_NEAR(config.impact_radius, 0.35f, 1e-6f);
     CHECK_NEAR(config.impact_strength, 0.01f, 1e-6f);
-    CHECK_NEAR(config.rain_rate, 8.0f, 1e-6f);
+    CHECK_NEAR(config.rain_rate, 30.0f, 1e-6f);
     CHECK(config.seed == 1);
 }
 
@@ -118,7 +118,7 @@ TEST_CASE("config", rejects_invalid_grid_and_physics) {
         config.*field = -0.01f;
         CHECK_THROWS(water::validate(config), std::invalid_argument);
     }
-    CHECK_THROWS(parse({"--rain-rate", "60.1"}), std::invalid_argument);
+    CHECK_THROWS(parse({"--rain-rate", "120.1"}), std::invalid_argument);
     CHECK_THROWS(parse({"--strength", "0.0601"}), std::invalid_argument);
     CHECK_THROWS(parse({"--radius", "0.01"}), std::invalid_argument);
     CHECK_THROWS(parse({"--radius", "3.1"}), std::invalid_argument);
@@ -150,7 +150,7 @@ TEST_CASE("config", rejects_nonfinite_values_in_every_float_field) {
 TEST_CASE("config", accepts_validation_boundaries) {
     auto config = parse({"--nx", "8", "--ny", "12", "--lx", "4", "--lz", "6",
                          "--radius", "1", "--strength", "0.02", "--damping", "0",
-                         "--rain-rate", "60", "--seed", "0"});
+                         "--rain-rate", "120", "--seed", "0"});
     water::validate(config);
     config.grid = {2048, 2048, 20.0f, 12.0f};
     config.impact_radius = 3.0f;
@@ -215,4 +215,11 @@ TEST_CASE("config", default_depth_and_interactive_steps) {
     CHECK(parse({"--depth", "0.1", "--strength", "0.001"}).depth == .1f);
     for (const char* value : {"0", "-1", "nan", "inf"})
         CHECK_THROWS(parse({"--depth", value}), std::invalid_argument);
+}
+
+TEST_CASE("config", rain_and_damping_accept_new_interactive_maxima) {
+    const auto config = parse({"--rain-rate", "120", "--damping", "10"});
+    CHECK(config.rain_rate == 120.0f);
+    CHECK(config.damping == 10.0f);
+    CHECK(parse({"--damping", "100"}).damping == 100.0f);
 }

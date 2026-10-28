@@ -13,10 +13,10 @@ struct Config {
     Grid grid;
     float depth = 3.0f;
     float gravity = 9.81f;
-    float damping = 0.15f;
+    float damping = 2.5f;
     float impact_radius = 0.35f;
     float impact_strength = 0.01f;
-    float rain_rate = 8.0f;
+    float rain_rate = 30.0f;
     float reflection = 0.5f;
     unsigned seed = 1;
 };

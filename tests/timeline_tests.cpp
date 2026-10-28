@@ -177,8 +177,8 @@ TEST_CASE("timeline", seeded_rain_is_reproducible_in_finite_ambient_field) {
     bool inside = false, outside = false;
     for (int step = 1; step <= 2400; ++step) {
         const double time = step / 120.0;
-        const auto a = first.tick(time, true, 60.0f, 0.01f, view());
-        const auto b = second.tick(time, true, 60.0f, 0.01f, view());
+        const auto a = first.tick(time, true, 120.0f, 0.01f, view());
+        const auto b = second.tick(time, true, 120.0f, 0.01f, view());
         CHECK(a.size() == b.size());
         impacts += a.size();
         CHECK(first.active().size() == second.active().size());
@@ -229,8 +229,8 @@ TEST_CASE("timeline", rain_waits_vary_and_seed_changes_the_schedule) {
     water::DropScheduler first(config);
     config.seed = 2;
     water::DropScheduler other_seed(config);
-    first.tick(0.5, true, 60.0f, 0.01f, view());
-    other_seed.tick(0.5, true, 60.0f, 0.01f, view());
+    first.tick(0.5, true, 120.0f, 0.01f, view());
+    other_seed.tick(0.5, true, 120.0f, 0.01f, view());
     CHECK(first.active().size() >= 3);
     CHECK(!other_seed.active().empty());
     CHECK(first.active()[0].start != other_seed.active()[0].start);
@@ -243,30 +243,30 @@ TEST_CASE("timeline", rain_waits_vary_and_seed_changes_the_schedule) {
 
 TEST_CASE("timeline", long_rain_interval_has_bounded_work_and_no_later_backlog) {
     water::DropScheduler drops(water::Config{});
-    const auto events = drops.tick(10000.0, true, 60.0f, 0.01f, view());
+    const auto events = drops.tick(10000.0, true, 120.0f, 0.01f, view());
     CHECK(events.size() <= 256);
     CHECK(!events.empty());
     CHECK(events.size() + drops.active().size() <= 256);
     const auto pending = std::count_if(drops.active().begin(), drops.active().end(), [](const water::Drop& drop) {
         return drop.x >= 0 && drop.x <= 20 && drop.z >= 0 && drop.z <= 12;
     });
-    CHECK(drops.tick(10000.0, true, 60.0f, 0.01f, view()).empty());
-    CHECK(drops.tick(10100.0, false, 60.0f, 0.01f, view()).size() == pending);
+    CHECK(drops.tick(10000.0, true, 120.0f, 0.01f, view()).empty());
+    CHECK(drops.tick(10100.0, false, 120.0f, 0.01f, view()).size() == pending);
 }
 
 TEST_CASE("timeline", disabling_rain_keeps_falling_drops_without_backlog) {
     water::DropScheduler drops(water::Config{});
-    CHECK(drops.tick(0.2, true, 60.0f, 0.01f, view()).empty());
+    CHECK(drops.tick(0.2, true, 120.0f, 0.01f, view()).empty());
     const auto falling = drops.active().size();
     CHECK(falling > 0);
-    CHECK(drops.tick(0.21, false, 60.0f, 0.01f, view()).empty());
+    CHECK(drops.tick(0.21, false, 120.0f, 0.01f, view()).empty());
     CHECK(drops.active().size() == falling);
     const auto pool_flights = std::count_if(drops.active().begin(), drops.active().end(), [](const water::Drop& drop) {
         return drop.x >= 0 && drop.x <= 20 && drop.z >= 0 && drop.z <= 12;
     });
-    CHECK(drops.tick(100.0, false, 60.0f, 0.01f, view()).size() == pool_flights);
+    CHECK(drops.tick(100.0, false, 120.0f, 0.01f, view()).size() == pool_flights);
     CHECK(drops.active().empty());
-    CHECK(drops.tick(100.0, true, 60.0f, 0.01f, view()).empty());
+    CHECK(drops.tick(100.0, true, 120.0f, 0.01f, view()).empty());
     CHECK(drops.active().empty());
 }
 
@@ -274,30 +274,30 @@ TEST_CASE("timeline", zero_rain_rate_does_not_build_a_backlog) {
     water::DropScheduler drops(water::Config{});
     CHECK(drops.tick(100.0, true, 0.0f, 0.01f, view()).empty());
     CHECK(drops.active().empty());
-    CHECK(drops.tick(100.0, true, 60.0f, 0.01f, view()).empty());
+    CHECK(drops.tick(100.0, true, 120.0f, 0.01f, view()).empty());
     CHECK(drops.active().empty());
 }
 
 TEST_CASE("timeline", full_capacity_discards_automatic_rain_arrivals) {
     water::DropScheduler drops(water::Config{});
     for (int i = 0; i < 256; ++i) CHECK(drops.spawn(5.0f, 6.0f, 0.0, view()));
-    CHECK(drops.tick(0.5, true, 60.0f, 0.01f, view()).empty());
+    CHECK(drops.tick(0.5, true, 120.0f, 0.01f, view()).empty());
     CHECK(drops.active().size() == 256);
     const double deadline = drops.active()[0].arrival;
-    CHECK(drops.tick(deadline, false, 60.0f, 0.01f, view()).size() == 256);
+    CHECK(drops.tick(deadline, false, 120.0f, 0.01f, view()).size() == 256);
     CHECK(drops.active().empty());
-    CHECK(drops.tick(deadline, true, 60.0f, 0.01f, view()).empty());
+    CHECK(drops.tick(deadline, true, 120.0f, 0.01f, view()).empty());
     CHECK(drops.active().empty());
 }
 
 TEST_CASE("timeline", reset_restarts_seed_schedule_and_removes_manual_drops) {
     water::DropScheduler drops(water::Config{}), fresh(water::Config{});
-    drops.tick(0.3, true, 60.0f, 0.01f, view());
+    drops.tick(0.3, true, 120.0f, 0.01f, view());
     CHECK(drops.spawn(1.0f, 2.0f, 0.3, view()));
     drops.reset();
     CHECK(drops.active().empty());
-    const auto a = drops.tick(4.0, true, 60.0f, 0.01f, view());
-    const auto b = fresh.tick(4.0, true, 60.0f, 0.01f, view());
+    const auto a = drops.tick(4.0, true, 120.0f, 0.01f, view());
+    const auto b = fresh.tick(4.0, true, 120.0f, 0.01f, view());
     CHECK(a.size() == b.size());
     CHECK(!a.empty());
     for (std::size_t i = 0; i < a.size(); ++i) {
@@ -334,7 +334,7 @@ TEST_CASE("timeline", scheduler_rejects_invalid_controls_and_backward_time) {
     CHECK_THROWS(drops.tick(0.9, false, 8.0f, 0.01f, view()), std::invalid_argument);
     CHECK_THROWS(drops.spawn(1.0f, 2.0f, 0.9, view()), std::invalid_argument);
     CHECK_THROWS(drops.tick(1.0, true, -1.0f, 0.01f, view()), std::invalid_argument);
-    CHECK_THROWS(drops.tick(1.0, true, 61.0f, 0.01f, view()), std::invalid_argument);
+    CHECK_THROWS(drops.tick(1.0, true, 120.1f, 0.01f, view()), std::invalid_argument);
     CHECK_THROWS(drops.tick(1.0, true, 8.0f, 0.021f, view()), std::invalid_argument);
     CHECK_THROWS(drops.tick(std::numeric_limits<double>::quiet_NaN(), false, 8.0f, 0.01f, view()),
                  std::invalid_argument);

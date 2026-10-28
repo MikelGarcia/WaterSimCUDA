@@ -162,12 +162,12 @@ void demo(const water::Config& config) {
         if (IsKeyPressed(KEY_SPACE)) paused = !paused;
         if (IsKeyPressed(KEY_R)) app.reset();
         if (IsKeyPressed(KEY_T)) rain = !rain;
-        if (IsKeyPressed(KEY_UP)) rate = std::min(60.0f, rate + 1);
+        if (IsKeyPressed(KEY_UP)) rate = std::min(120.0f, rate + 1);
         if (IsKeyPressed(KEY_DOWN)) rate = std::max(0.0f, rate - 1);
         if (IsKeyPressed(KEY_RIGHT)) strength = std::min(0.02f * simulation.config().depth, strength + 0.001f);
         if (IsKeyPressed(KEY_LEFT)) strength = std::max(0.0f, strength - 0.001f);
-        if (IsKeyPressed(KEY_RIGHT_BRACKET)) damping = std::clamp(damping + 0.05f, 0.0f, 5.0f);
-        if (IsKeyPressed(KEY_LEFT_BRACKET)) damping = std::clamp(damping - 0.05f, 0.0f, 5.0f);
+        if (IsKeyPressed(KEY_RIGHT_BRACKET)) damping = std::clamp(damping + 0.05f, 0.0f, 10.0f);
+        if (IsKeyPressed(KEY_LEFT_BRACKET)) damping = std::clamp(damping - 0.05f, 0.0f, 10.0f);
         if (IsKeyPressed(KEY_COMMA)) reflection = water::adjust_reflection(reflection, -1);
         if (IsKeyPressed(KEY_PERIOD)) reflection = water::adjust_reflection(reflection, 1);
         if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
@@ -238,10 +238,10 @@ void help() {
               "  --nx 512 --ny 512        grid cells per axis [8, 2048]\n"
               "  --lx 20 --lz 12          basin dimensions (m)\n"
               "  --depth 3               mean depth (m)\n"
-              "  --damping 0.15          drag (/s); interactive range [0, 5]\n"
+              "  --damping 2.5           drag (/s); interactive range [0, 10]\n"
               "  --radius 0.35           impact radius (m), >=2 cell widths\n"
               "  --strength 0.01         impact displacement (m), [0, 0.02 * depth]\n"
-              "  --rain-rate 8           random drops per second [0, 60]\n"
+              "  --rain-rate 30          random drops per second [0, 120]\n"
               "  --seed 1                random seed (unsigned integer)\n"
               "  --reflection 0.5        reflection/refraction mix [0, 1]\n"
               "Space pause | R reset | T rain | arrows up/down rain, left/right strength\n"
