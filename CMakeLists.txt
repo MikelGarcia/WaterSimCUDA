@@ -26,9 +26,10 @@ if(WATER_BUILD_DEMO)
     FetchContent_MakeAvailable(raylib)
 endif()
 
-add_library(water_core src/config.cpp src/simulation.cu)
+include(cmake/WaterCudaRuntime.cmake)
+add_library(water_core src/config.cpp src/simulation.cu src/dispersive_continuity.cu)
 target_include_directories(water_core PUBLIC src)
-target_link_libraries(water_core PUBLIC CUDA::cudart)
+target_link_libraries(water_core PUBLIC CUDA::cudart CUDA::cufft)
 
 if(WATER_BUILD_DEMO)
     add_library(water_timeline src/timeline.cpp)
@@ -75,7 +76,7 @@ include(CTest)
 if(BUILD_TESTING)
     add_library(water_validation src/validation.cu)
     target_link_libraries(water_validation PUBLIC water_core)
-    add_executable(water_tests tests/test_main.cpp tests/config_tests.cpp tests/numerics_tests.cu tests/impact_tests.cu tests/timing_tests.cpp tests/boat_tests.cu tests/wake_tests.cu)
+    add_executable(water_tests tests/test_main.cpp tests/dispersion_tests.cu tests/config_tests.cpp tests/numerics_tests.cu tests/impact_tests.cu tests/timing_tests.cpp tests/boat_tests.cu tests/wake_tests.cu)
     target_link_libraries(water_tests PRIVATE water_validation)
     if(WATER_BUILD_DEMO)
         target_sources(water_tests PRIVATE tests/timeline_tests.cpp tests/controller_tests.cu tests/soak_tests.cu)
@@ -126,10 +127,35 @@ if(BUILD_TESTING)
         set_tests_properties(wake_visual PROPERTIES TIMEOUT 60)
         set_tests_properties(appearance PROPERTIES TIMEOUT 60)
     endif()
+    add_test(NAME fft COMMAND water_tests fft)
     add_test(NAME config COMMAND water_tests config)
     add_test(NAME boat COMMAND water_tests boat)
     add_test(NAME wake COMMAND water_tests wake)
     add_test(NAME numerics COMMAND water_tests numerics)
     add_test(NAME impacts COMMAND water_tests impacts)
     add_test(NAME timing COMMAND water_tests timing)
+endif()
+
+
+foreach(target water_tests water_demo water_interop_tests water_boat_interop_tests water_appearance_tests)
+    if(TARGET ${target})
+        water_deploy_cuda_runtime(${target})
+    endif()
+endforeach()
+
+if(BUILD_TESTING)
+    set(runtime_desktop_args)
+    if(WATER_BUILD_DEMO)
+        list(APPEND runtime_desktop_args
+            "-DDEMO_EXE=$<TARGET_FILE:water_demo>"
+            "-DINTEROP_EXE=$<TARGET_FILE:water_interop_tests>"
+            "-DBOAT_INTEROP_EXE=$<TARGET_FILE:water_boat_interop_tests>"
+            "-DAPPEARANCE_EXE=$<TARGET_FILE:water_appearance_tests>")
+    endif()
+    add_test(NAME runtime COMMAND ${CMAKE_COMMAND}
+        "-DTEST_EXE=$<TARGET_FILE:water_tests>"
+        "-DOUTSIDE_DIR=$ENV{TEMP}/WaterSimCUDA-runtime-${CMAKE_PROJECT_NAME}"
+        ${runtime_desktop_args}
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_smoke.cmake")
+    set_tests_properties(runtime PROPERTIES RUN_SERIAL TRUE TIMEOUT 300)
 endif()
