@@ -224,21 +224,21 @@ __device__ float wake_head(float x, float z, const BoatState& b,
     const float l = (x - b.x) * c + (z - b.z) * s;
     const float t = -(x - b.x) * s + (z - b.z) * c;
     const float length = fmaxf(boat_geometry.length, 4 * fmaxf(dx, dz));
-    const float width = fmaxf(boat_geometry.beam, 2 * fmaxf(dx, dz));
-    const float bow = wake_bump((l - .25f * length) / (.5f * length)) * wake_bump(t / width) -
-        .5f * wake_bump((l + .35f * length) / (.75f * length)) * wake_bump(t / (1.5f * width));
-    const float stern = wake_bump((-l - .25f * length) / (.5f * length)) * wake_bump(t / width) -
-        .5f * wake_bump((-l + .35f * length) / (.75f * length)) * wake_bump(t / (1.5f * width));
+    const float width = fmaxf(.07f, 2 * fmaxf(dx, dz));
     const float blend = smooth_gain((b.vx * c + b.vz * s + .01f) / .02f);
-    const float amplitude = .002f * (speed_squared / (1.875f * 1.875f)) *
-        smooth_gain((sqrtf(speed_squared) - .0001f) / .0099f) * fminf(1, depth / 1.0f);
-    // Bounded stern shedding radiates waves even for a subcritical translating hull.
-    const float aft = wake_bump((l + .8f * length) / (.5f * length));
-    const float fore = wake_bump((l - .8f * length) / (.5f * length));
-    const float shedding = .03f * (speed_squared / (1.875f * 1.875f)) *
+    float pressure = 0;
+    for (int direction = -1; direction <= 1; direction += 2) {
+        const float aft = .5f * boat_geometry.length - direction * l;
+        const float envelope = smooth_gain(aft / (.2f * length)) *
+            (1 - smooth_gain((aft - 1.5f * length) / (.5f * length)));
+        const float offset = .7f * aft;
+        const float arms = wake_bump((t - offset) / width) + wake_bump((t + offset) / width);
+        pressure += (direction == 1 ? blend : 1 - blend) * envelope * arms;
+    }
+    // Compact bow-rooted pressure arms; travel modulation also releases freely evolving waves.
+    return .012f * (speed_squared / (1.875f * 1.875f)) *
         smooth_gain((sqrtf(speed_squared) - .0001f) / .0099f) * fminf(1, depth / 3.0f) *
-        sinf(b.wake_phase) * (blend * aft + (1 - blend) * fore) * wake_bump(t / (1.5f * width));
-    return amplitude * (blend * bow + (1 - blend) * stern) + shedding;
+        sqrtf(fminf(1, depth / 3.0f)) * (1 + .3f * sinf(b.wake_phase)) * pressure;
 }
 
 __global__ void update_velocity(const float* eta, float* u, float* v,

@@ -1214,9 +1214,10 @@ TEST_CASE("wake_visual", default_rendered_trail) {
     const Vector3 target{pose.x - 10, 0, pose.z - 6};
     const Camera3D views[]{
         {{13.3f, 21.76f, 17.49f}, {0, 0, 0}, {0, 1, 0}, 42, CAMERA_PERSPECTIVE},
-        {{target.x + 1.5f, 1.5f, target.z + 2}, target, {0, 1, 0}, 42, CAMERA_PERSPECTIVE}};
+        {{target.x + 1.5f, 1.5f, target.z + 2}, target, {0, 1, 0}, 42, CAMERA_PERSPECTIVE},
+        {{target.x, 4, target.z}, target, {0, 0, -1}, 42, CAMERA_PERSPECTIVE}};
     std::filesystem::create_directories("boat-captures");
-    for (int view = 0; view < 2; ++view) {
+    for (int view = 0; view < 3; ++view) {
         std::vector<Color> disturbed;
         for (int flat = 0; flat < 2; ++flat) {
             auto surface = state;
@@ -1234,6 +1235,7 @@ TEST_CASE("wake_visual", default_rendered_trail) {
             const auto colors = LoadImageColors(image);
             CHECK(colors);
             int changed = 0;
+            int bow_shoulders[2]{};
             double difference = 0;
             if (!flat) {
                 disturbed.assign(colors, colors + image.width * image.height);
@@ -1244,6 +1246,17 @@ TEST_CASE("wake_visual", default_rendered_trail) {
                                       std::abs(int(a.b) - b.b);
                     difference += delta;
                     changed += delta > 3;
+                    if (view == 2 && delta > 3) {
+                        const Ray ray = GetScreenToWorldRay(
+                            {float(i % image.width), float(i / image.width)}, views[view]);
+                        const float distance = -ray.position.y / ray.direction.y;
+                        const float l = ray.position.x + distance * ray.direction.x - target.x;
+                        const float t = ray.position.z + distance * ray.direction.z - target.z;
+                        const float ridge = .7f * (.3f - l);
+                        if (l > .02f && l < .18f && std::abs(t) > .09f &&
+                            std::abs(std::abs(t) - ridge) < .06f)
+                            ++bow_shoulders[t > 0];
+                    }
                 }
             }
             UnloadImageColors(colors);
@@ -1255,7 +1268,13 @@ TEST_CASE("wake_visual", default_rendered_trail) {
                 std::cout << "WAKE RENDER view=" << view << " mean RGB=" << difference / (3 * 840 * 560)
                           << " changed pixels=" << changed << '\n';
                 // The old attached pressure changed only 14 overview / 2466 close pixels.
-                CHECK(changed > (view == 0 ? 50 : 10000));
+                const int minimum_changed[]{50, 10000, 3000};
+                CHECK(changed > minimum_changed[view]);
+                if (view == 2) {
+                    std::cout << "BOW SHOULDERS changed pixels=" << bow_shoulders[0]
+                              << ',' << bow_shoulders[1] << '\n';
+                    CHECK(bow_shoulders[0] > 20 && bow_shoulders[1] > 20);
+                }
             }
         }
     }
@@ -1276,6 +1295,13 @@ TEST_CASE("wake_visual", released_wave_remains_visible_outside_the_pressure_supp
     const auto pose = water::download_boat(simulation);
     water::upload_boat(simulation, {pose.x, pose.z, pose.yaw, 0, 0, 0});
     const Vector3 target{pose.x - 10, 0, pose.z - 6};
+    const double dx = double(config.grid.lx) / config.grid.nx;
+    const double dz = double(config.grid.lz) / config.grid.ny;
+    const double cell = std::max(dx, dz);
+    const double length = std::max(double(water::boat_geometry.length), 4 * cell);
+    const double support_radius = std::hypot(2 * length - .5 * water::boat_geometry.length,
+                                            1.4 * length + std::max(.07, 2 * cell)) +
+                                  2 * std::hypot(dx, dz);
     const Camera3D views[]{
         {{13.3f, 21.76f, 17.49f}, {0, 0, 0}, {0, 1, 0}, 42, CAMERA_PERSPECTIVE},
         {{target.x + 4, 5, target.z + 6}, target, {0, 1, 0}, 42, CAMERA_PERSPECTIVE}};
@@ -1316,9 +1342,9 @@ TEST_CASE("wake_visual", released_wave_remains_visible_outside_the_pressure_supp
                             const float t = -ray.position.y / ray.direction.y;
                             const float wx = ray.position.x + t * ray.direction.x;
                             const float wz = ray.position.z + t * ray.direction.z;
-                            const double radius = std::hypot(wx - (target.x - .48f), wz - target.z);
+                            const double radius = std::hypot(wx - target.x, wz - target.z);
                             // This world-space exclusion contains the complete pressure footprint.
-                            if (t > 0 && radius > 1 && std::abs(wx) < 10 && std::abs(wz) < 6)
+                            if (t > 0 && radius > support_radius && std::abs(wx) < 10 && std::abs(wz) < 6)
                                 outside_changed += delta > 3;
                         }
                     }

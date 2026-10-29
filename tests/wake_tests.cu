@@ -23,22 +23,22 @@ double head(double x, double z, const water::BoatState& b, const water::Config& 
         return 0;
     const double cell = std::max(double(c.grid.lx) / c.grid.nx, double(c.grid.lz) / c.grid.ny);
     const double length = std::max(double(water::boat_geometry.length), 4 * cell);
-    const double width = std::max(double(water::boat_geometry.beam), 2 * cell);
+    const double width = std::max(.07, 2 * cell);
     const double longitudinal = (x - b.x) * std::cos(yaw) + (z - b.z) * std::sin(yaw);
     const double transverse = -(x - b.x) * std::sin(yaw) + (z - b.z) * std::cos(yaw);
-    auto bump = [](double q) { return std::abs(q) < 1 ? std::pow(1 - q * q, 3) : 0.0; };
-    auto pattern = [&](double l) {
-        return bump((l - .25 * length) / (.5 * length)) * bump(transverse / width) -
-               .5 * bump((l + .35 * length) / (.75 * length)) * bump(transverse / (1.5 * width));
+    auto ridge = [&](double l, double sign) {
+        const double aft = .5 * water::boat_geometry.length - l;
+        const double q = (transverse - sign * .7 * aft) / width;
+        if (aft <= 0 || aft >= 2 * length || std::abs(q) >= 1) return 0.0;
+        const double envelope = ramp(aft / (.2 * length)) *
+            (1 - ramp((aft - 1.5 * length) / (.5 * length)));
+        return envelope * std::pow(1 - q * q, 3);
     };
     const double blend = ramp((vx * std::cos(yaw) + vz * std::sin(yaw) + .01) / .02);
-    const double shedding = .03 * (speed * speed / (1.875 * 1.875)) * ramp((speed - .0001) / .0099) *
-        std::min(1.0, double(c.depth) / 3.0) * std::sin(b.wake_phase) *
-        (blend * bump((longitudinal + .8 * length) / (.5 * length)) +
-         (1-blend) * bump((longitudinal - .8 * length) / (.5 * length))) * bump(transverse / (1.5 * width));
-    return shedding + .002 * (speed * speed / (1.875 * 1.875)) * ramp((speed - .0001) / .0099) *
-           std::min(1.0, double(c.depth) / 1.0) *
-           (blend * pattern(longitudinal) + (1 - blend) * pattern(-longitudinal));
+    const double pressure = blend * (ridge(longitudinal, -1) + ridge(longitudinal, 1)) +
+        (1 - blend) * (ridge(-longitudinal, -1) + ridge(-longitudinal, 1));
+    return .012 * (speed * speed / (1.875 * 1.875)) * ramp((speed - .0001) / .0099) *
+        std::min(1.0, double(c.depth) / 3.0) * std::sqrt(std::min(1.0, double(c.depth) / 3.0)) * (1 + .3 * std::sin(b.wake_phase)) * pressure;
 }
 water::Snapshot forced(water::Simulation& s, const water::Config& c, water::BoatState b, float dt,
                        float damping) {
@@ -85,6 +85,45 @@ double intensity(const water::Snapshot& s) {
     return sum;
 }
 } // namespace
+TEST_CASE("wake", pressure_starts_at_leading_bow_and_opens_aft_on_both_sides) {
+    auto c = fixture();
+    c.grid = {320, 320, 6, 6};
+    water::Simulation simulation(c);
+    constexpr float dt = .00001f;
+    for (int orientation = 0; orientation < 3; ++orientation) {
+        simulation.reset();
+        const float yaw = orientation == 1 ? 1.57079632679f : 0;
+        const float direction = orientation == 2 ? -1.f : 1.f;
+        water::upload_boat(simulation, {3, 3, yaw, direction * 1.5f * std::cos(yaw),
+                                       direction * 1.5f * std::sin(yaw), 0, 1.57079632679f});
+        simulation.step(dt, 0);
+        const auto state = water::download(simulation);
+        const auto boat = water::download_boat(simulation);
+        const float dx = c.grid.lx / c.grid.nx;
+        std::vector<double> pressure(state.eta.size());
+        for (int z = 0; z < c.grid.ny; ++z)
+            for (int x = 1; x < c.grid.nx; ++x)
+                pressure[z * c.grid.nx + x] = pressure[z * c.grid.nx + x - 1] -
+                    dx * state.u[z * (c.grid.nx + 1) + x] / (c.gravity * dt);
+        auto sample = [&](double longitudinal, double transverse) {
+            longitudinal *= direction;
+            const double x = boat.x + longitudinal * std::cos(yaw) - transverse * std::sin(yaw);
+            const double z = boat.z + longitudinal * std::sin(yaw) + transverse * std::cos(yaw);
+            return pressure[int(z / dx) * c.grid.nx + int(x / dx)];
+        };
+        for (double aft : {.15, .45, .9}) {
+            const double l = .3 - aft, t = .7 * aft;
+            const double left = sample(l, -t), right = sample(l, t);
+            CHECK(left > .0003 && right > .0003);
+            CHECK(std::abs(left - right) < .0002);
+            CHECK(left > 2 * std::abs(sample(l, 0)));
+            CHECK(left > 2 * std::abs(sample(.3 + aft, t)));
+        }
+        CHECK(sample(.24, .042) > .0001);
+        CHECK(std::abs(sample(.5, 0)) < 1e-6);
+    }
+}
+
 TEST_CASE("wake", independent_pressure_gradient_and_continuity) {
     for (bool transpose : {false, true}) {
         auto c = fixture();
@@ -102,6 +141,16 @@ TEST_CASE("wake", independent_pressure_gradient_and_continuity) {
                            {1.5f, 1.5f, .4f, .9f, .3f, 0, 4.2f}})
                 CHECK(intensity(forced(s, c, b, .001f, damping)) > 1e-10);
     }
+}
+TEST_CASE("wake", coarse_grid_pressure_remains_anchored_to_the_physical_leading_bow) {
+    auto c = fixture();
+    c.grid = {32, 24, 6, 4};
+    c.impact_radius = .4f;
+    water::Simulation simulation(c);
+    for (const auto b : {water::BoatState{3, 2, 0, 1.5f, 0, 0},
+                         {3, 2, 0, -1.5f, 0, 0},
+                         {3, 2, 1.57079632679f, 0, 1.5f, 0}})
+        CHECK(intensity(forced(simulation, c, b, .001f, 0)) > 1e-10);
 }
 TEST_CASE("wake", rest_coasting_speed_and_lateral_continuity) {
     auto c = fixture();
@@ -237,6 +286,10 @@ void boat_soak(water::Config c) {
         CHECK(std::abs(mean) <= 1e-6 * std::max(c.depth, .25f));
         for (float eta : state.eta)
             peak = std::max(peak, std::abs(eta));
+        if (peak >= .02f * c.depth)
+            std::cout << "BOAT SOAK bound exceeded grid=" << c.grid.nx << 'x' << c.grid.ny
+                      << " depth=" << c.depth << " damping=" << c.damping
+                      << " second=" << second << " peak=" << peak << '\n';
         CHECK(peak < .02f * c.depth);
     }
     std::cout << "BOAT SOAK " << c.grid.nx << 'x' << c.grid.ny << " H = " << c.depth
@@ -268,6 +321,20 @@ TEST_CASE("wake", sustained_motion_radiates_resolved_trailing_waves) {
         s.step(dt, c.damping, {1, 0});
     const auto b = water::download_boat(s);
     const auto state = water::download(s);
+    auto height = [&](double l, double t) {
+        const int x = int((b.x + l) * c.grid.nx / c.grid.lx);
+        const int z = int((b.z + t) * c.grid.ny / c.grid.lz);
+        return state.eta[z * c.grid.nx + x];
+    };
+    // The first visible shoulders are ahead of the hull centre and outside its waterline.
+    for (double aft : {.2, .45, .8}) {
+        const double l = .3 - aft, t = .7 * aft;
+        for (double side : {-1., 1.}) {
+            CHECK(height(l, side * t) < -.001);
+            CHECK(std::abs(height(l, side * t)) > 3 * std::abs(height(l, 0)));
+            CHECK(std::abs(height(l, side * t)) > 3 * std::abs(height(.3 + aft, side * t)));
+        }
+    }
     double trailing = 0;
     for (int z = 0; z < c.grid.ny; ++z)
         for (int x = 0; x < c.grid.nx; ++x) {
@@ -315,47 +382,55 @@ TEST_CASE("wake", released_waves_travel_beyond_the_complete_forcing_footprint) {
         for (float t = 0; t < 3; t += dt)
             simulation.step(dt, c.damping, {1, 0});
         const auto boat = water::download_boat(simulation);
-        const double stern_x = boat.x - .8 * water::boat_geometry.length;
+        const double source_x = boat.x;
+        const double dx = double(c.grid.lx) / c.grid.nx, dz = double(c.grid.lz) / c.grid.ny;
+        const double cell = std::max(dx, dz);
+        const double length = std::max(double(water::boat_geometry.length), 4 * cell);
+        const double width = std::max(.07, 2 * cell);
+        const double support_radius = std::hypot(2 * length - .5 * water::boat_geometry.length,
+                                                1.4 * length + width) +
+                                      2 * std::hypot(dx, dz);
         if (click) {
             simulation.reset();
-            const water::Impact impact{float(stern_x), boat.z, c.impact_radius, c.impact_strength};
+            const water::Impact impact{float(source_x), boat.z, c.impact_radius, c.impact_strength};
             simulation.apply_impacts(&impact, 1);
         }
         water::upload_boat(simulation, {boat.x, boat.z, boat.yaw, 0, 0, 0});
         float elapsed = 0;
-        double initial_radius = 0;
+        double initial_front = 0;
         for (float target : {0.f, .2f, .4f, .6f, .8f}) {
             while (elapsed < target) {
                 simulation.step(dt, c.damping);
                 elapsed += dt;
             }
             const auto state = water::download(simulation);
-            double far_peak = 0, mass = 0, weighted = 0, total = 0;
+            double far_peak = 0, mass = 0, front = 0;
             for (int z = 0; z < c.grid.ny; ++z) {
                 for (int x = 0; x < c.grid.nx; ++x) {
-                    const double radius = std::hypot((x + .5) * c.grid.lx / c.grid.nx - stern_x,
+                    const double radius = std::hypot((x + .5) * c.grid.lx / c.grid.nx - source_x,
                                                      (z + .5) * c.grid.lz / c.grid.ny - boat.z);
                     const double height = state.eta[z * c.grid.nx + x];
-                    // One metre excludes both pressure lobes, including their transverse support.
-                    if (radius > 1)
+                    // Includes both complete arms, reversed support, and the gradient/divergence stencil.
+                    if (radius > support_radius)
                         far_peak = std::max(far_peak, std::abs(height));
-                    weighted += radius * radius * height * height;
-                    total += height * height;
+                    // The extended source contains inward and outward waves; track its resolved front.
+                    if (std::abs(height) > .0001)
+                        front = std::max(front, radius);
                     mass += height;
                 }
             }
-            const double radius = std::sqrt(weighted / total);
+            std::cout << "RELEASE click=" << click << " time=" << elapsed
+                      << " support radius=" << support_radius << " outside peak=" << far_peak
+                      << " resolved front=" << front << '\n';
             CHECK(std::abs(mass / state.eta.size()) < 1e-9);
             if (target == 0) {
-                initial_radius = radius;
+                initial_front = front;
             } else {
                 CHECK(far_peak > .0001);
                 const double travel = std::sqrt(c.gravity * c.depth) * elapsed;
-                CHECK(radius - initial_radius > .65 * travel);
-                CHECK(radius - initial_radius < 1.2 * travel);
+                CHECK(front - initial_front > .65 * travel);
+                CHECK(front - initial_front < 1.2 * travel);
             }
-            std::cout << "RELEASE click=" << click << " time=" << elapsed
-                      << " outside peak=" << far_peak << " rms radius=" << radius << '\n';
         }
     }
 }
