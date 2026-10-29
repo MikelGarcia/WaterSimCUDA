@@ -1,3 +1,4 @@
+#include "dispersion_reference.hpp"
 #include "validation.hpp"
 #include "test_support.hpp"
 #include <algorithm>
@@ -49,32 +50,18 @@ water::Snapshot forced(water::Simulation& s, const water::Config& c, water::Boat
     const auto got = water::download(s);
     const auto& g = c.grid;
     const double dx = double(g.lx) / g.nx, dz = double(g.lz) / g.ny;
-    std::vector<double> p(g.nx * g.ny), u(got.u.size()), v(got.v.size());
+    std::vector<double> p(g.nx * g.ny);
     for (int z = 0; z < g.ny; ++z)
         for (int x = 0; x < g.nx; ++x)
             p[z * g.nx + x] = head((x + .5) * dx, (z + .5) * dz, b, c);
-    for (int z = 0; z < g.ny; ++z)
-        for (int x = 1; x < g.nx; ++x)
-            u[z * (g.nx + 1) + x] =
-                -c.gravity * dt * (p[z * g.nx + x] - p[z * g.nx + x - 1]) / dx / (1 + damping * dt);
-    for (int z = 1; z < g.ny; ++z)
-        for (int x = 0; x < g.nx; ++x)
-            v[z * g.nx + x] = -c.gravity * dt * (p[z * g.nx + x] - p[(z - 1) * g.nx + x]) / dz /
-                              (1 + damping * dt);
+    water::Snapshot initial{std::vector<float>(got.eta.size()), std::vector<float>(got.u.size()), std::vector<float>(got.v.size())};
+    const auto expected = reference::step(c, initial, dt, damping, p);
     auto close = [](double actual, double expected) {
         CHECK(std::abs(actual - expected) <= 2e-6 + 2e-5 * std::abs(expected));
     };
-    for (size_t i = 0; i < u.size(); ++i)
-        close(got.u[i], u[i]);
-    for (size_t i = 0; i < v.size(); ++i)
-        close(got.v[i], v[i]);
-    for (int z = 0; z < g.ny; ++z)
-        for (int x = 0; x < g.nx; ++x) {
-            double eta = -c.depth * dt *
-                         ((u[z * (g.nx + 1) + x + 1] - u[z * (g.nx + 1) + x]) / dx +
-                          (v[(z + 1) * g.nx + x] - v[z * g.nx + x]) / dz);
-            close(got.eta[z * g.nx + x], eta);
-        }
+    for (size_t i = 0; i < got.u.size(); ++i) close(got.u[i], expected.u[i]);
+    for (size_t i = 0; i < got.v.size(); ++i) close(got.v[i], expected.v[i]);
+    for (size_t i = 0; i < got.eta.size(); ++i) close(got.eta[i], expected.eta[i]);
     return got;
 }
 double intensity(const water::Snapshot& s) {
@@ -223,9 +210,16 @@ TEST_CASE("wake", moving_pressure_preserves_existing_waves_and_wake_history) {
             CHECK_NEAR(std::accumulate(sum.eta.begin(), sum.eta.end(), 0.0) / sum.eta.size(),
                        .0004, 1e-9);
             for (auto fields : {std::array<const std::vector<float>*, 3>{&a.eta, &b.eta, &sum.eta},
-                                {&a.u, &b.u, &sum.u}, {&a.v, &b.v, &sum.v}})
-                for (size_t i = 0; i < fields[0]->size(); ++i)
-                    CHECK_NEAR((*fields[2])[i], (*fields[0])[i] + (*fields[1])[i], 1e-8f);
+                                {&a.u, &b.u, &sum.u}, {&a.v, &b.v, &sum.v}}) {
+                double error = 0, scale = 0;
+                for (size_t i = 0; i < fields[0]->size(); ++i) {
+                    const double expected = double((*fields[0])[i]) + (*fields[1])[i];
+                    error = std::max(error, std::abs(double((*fields[2])[i]) - expected));
+                    scale = std::max(scale, std::abs(expected));
+                }
+                if (step == 199) std::cout << "HISTORY damping=" << damping << " error=" << error << " scale=" << scale << '\n';
+                CHECK(error <= 2e-8 + 2e-6 * scale);
+            }
         }
         const auto accumulated = water::download(wake);
         const auto latest = water::download(instantaneous);
@@ -373,64 +367,39 @@ TEST_CASE("wake", shedding_phase_tracks_travel_and_reset) {
     CHECK(wrapped.wake_phase >= 0 && wrapped.wake_phase < .02f);
 }
 
-TEST_CASE("wake", released_waves_travel_beyond_the_complete_forcing_footprint) {
-    water::Config c;
+TEST_CASE("wake", released_waves_follow_autonomous_dispersion_after_source_stops) {
+    auto c = fixture();
+    c.grid = {32, 24, 8, 6}; c.impact_radius = .5f;
     for (bool click : {false, true}) {
         water::Simulation simulation(c);
-        water::upload_boat(simulation, {5, 6, 0, 0, 0, 0});
-        const float dt = float(water::stable_dt(c)) * .8f;
-        for (float t = 0; t < 3; t += dt)
-            simulation.step(dt, c.damping, {1, 0});
+        water::upload_boat(simulation, {3, 3, 0, 1, 0, 0});
+        const float dt = .008f;
+        for (int step = 0; step < 100; ++step) simulation.step(dt, c.damping);
         const auto boat = water::download_boat(simulation);
-        const double source_x = boat.x;
-        const double dx = double(c.grid.lx) / c.grid.nx, dz = double(c.grid.lz) / c.grid.ny;
-        const double cell = std::max(dx, dz);
-        const double length = std::max(double(water::boat_geometry.length), 4 * cell);
-        const double width = std::max(.07, 2 * cell);
-        const double support_radius = std::hypot(2 * length - .5 * water::boat_geometry.length,
-                                                1.4 * length + width) +
-                                      2 * std::hypot(dx, dz);
         if (click) {
             simulation.reset();
-            const water::Impact impact{float(source_x), boat.z, c.impact_radius, c.impact_strength};
+            const water::Impact impact{boat.x, boat.z, c.impact_radius, c.impact_strength};
             simulation.apply_impacts(&impact, 1);
         }
         water::upload_boat(simulation, {boat.x, boat.z, boat.yaw, 0, 0, 0});
-        float elapsed = 0;
-        double initial_front = 0;
-        for (float target : {0.f, .2f, .4f, .6f, .8f}) {
-            while (elapsed < target) {
-                simulation.step(dt, c.damping);
-                elapsed += dt;
-            }
-            const auto state = water::download(simulation);
-            double far_peak = 0, mass = 0, front = 0;
-            for (int z = 0; z < c.grid.ny; ++z) {
-                for (int x = 0; x < c.grid.nx; ++x) {
-                    const double radius = std::hypot((x + .5) * c.grid.lx / c.grid.nx - source_x,
-                                                     (z + .5) * c.grid.lz / c.grid.ny - boat.z);
-                    const double height = state.eta[z * c.grid.nx + x];
-                    // Includes both complete arms, reversed support, and the gradient/divergence stencil.
-                    if (radius > support_radius)
-                        far_peak = std::max(far_peak, std::abs(height));
-                    // The extended source contains inward and outward waves; track its resolved front.
-                    if (std::abs(height) > .0001)
-                        front = std::max(front, radius);
-                    mass += height;
-                }
-            }
-            std::cout << "RELEASE click=" << click << " time=" << elapsed
-                      << " support radius=" << support_radius << " outside peak=" << far_peak
-                      << " resolved front=" << front << '\n';
-            CHECK(std::abs(mass / state.eta.size()) < 1e-9);
-            if (target == 0) {
-                initial_front = front;
-            } else {
-                CHECK(far_peak > .0001);
-                const double travel = std::sqrt(c.gravity * c.depth) * elapsed;
-                CHECK(front - initial_front > .65 * travel);
-                CHECK(front - initial_front < 1.2 * travel);
-            }
+        const auto initial = water::download(simulation);
+        auto expected = initial;
+        for (int step = 0; step < 100; ++step) {
+            expected = reference::step(c, expected, dt, 0);
+            simulation.step(dt, 0);
         }
+        const auto actual = water::download(simulation);
+        double error = 0, scale = 0, outside_change = 0;
+        for (size_t i = 0; i < actual.eta.size(); ++i) {
+            error = std::max(error, std::abs(double(actual.eta[i]) - expected.eta[i]));
+            scale = std::max(scale, std::abs(double(expected.eta[i])));
+            const double x = (i % c.grid.nx + .5) * c.grid.lx / c.grid.nx;
+            const double z = (i / c.grid.nx + .5) * c.grid.lz / c.grid.ny;
+            if (std::hypot(x - boat.x, z - boat.z) > 2.2)
+                outside_change = std::max(outside_change, std::abs(double(actual.eta[i]) - initial.eta[i]));
+        }
+        std::cout << "RELEASE click=" << click << " reference_error=" << error << " outside_change=" << outside_change << '\n';
+        CHECK(error <= 2e-7 + 3e-5 * scale);
+        CHECK(outside_change > 1e-7);
     }
 }

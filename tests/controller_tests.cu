@@ -120,6 +120,9 @@ TEST_CASE("controller", held_boat_pause_depth_resume_and_reset) {
 
 TEST_CASE("controller", controlled_boat_is_consistent_across_depth_selected_cfl_substeps) {
     auto shallow = fixture(), deep = fixture();
+    shallow.grid = deep.grid = {8, 8, 40, 40};
+    shallow.impact_radius = deep.impact_radius = 10;
+    shallow.gravity = deep.gravity = 100000;
     shallow.depth = .25f;
     shallow.impact_strength = .005f;
     deep.depth = 100;
@@ -153,7 +156,11 @@ TEST_CASE("controller", stalled_frame_preserves_drop_and_limits_advancement) {
 
 TEST_CASE("controller", advances_valid_depth_at_float_timestep_rounding_boundary) {
     water::Config config;
-    config.depth = 1.5178088f;
+    constexpr double pi = 3.14159265358979323846;
+    const double k = std::hypot(pi * (config.grid.nx - 1) / config.grid.lx,
+                              pi * (config.grid.ny - 1) / config.grid.lz);
+    config.gravity = float(std::pow(1.6 / double(float(1.0 / 120)), 2) /
+                           (k * std::tanh(k * config.depth)));
     water::Simulation simulation(config);
     const water::Impact impact{10, 6, config.impact_radius, config.impact_strength};
     simulation.apply_impacts(&impact, 1);
@@ -318,12 +325,12 @@ TEST_CASE("controller", paused_depth_change_preserves_state_and_flights_then_adv
     CHECK(drop.spawn_height == flight.spawn_height && drop.arrival == flight.arrival);
     CHECK(simulation.config().depth == .25f && simulation.config().impact_strength <= .005f);
     for (float invalid : {0.f, std::numeric_limits<float>::infinity(),
-                          std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::max()}) {
+                          std::numeric_limits<float>::quiet_NaN()}) {
         CHECK_THROWS(app.set_depth(invalid), std::invalid_argument);
         CHECK(simulation.config().depth == .25f && app.sim_time() == time);
     }
     CHECK_THROWS(app.frame(1.0 / 120, false, false, 0, .006f, .15f, view()), std::invalid_argument);
-    for (float depth : {1.5178088f, 100.f}) {
+    for (float depth : {6.f, 100.f}) {
         app.set_depth(depth);
         app.frame(1.0 / 120, false, false, 0, .005f, .15f, view());
     }
@@ -344,4 +351,37 @@ TEST_CASE("controller", exterior_automatic_arrival_leaves_entire_water_state_zer
     CHECK(app.drops().empty());
     const auto state = water::download(simulation);
     CHECK(zero(state.eta) && zero(state.u) && zero(state.v));
+}
+TEST_CASE("controller", live_depth_keeps_active_boat_rain_schedule_and_inflight_drops) {
+    auto config = fixture();
+    config.depth = 3;
+    water::Simulation a(config), b(config);
+    water::AppController subject(a, config), reference(b, config);
+    for (int tick = 0; tick < 30; ++tick) {
+        subject.frame(1.0 / 120, false, true, 120, .005f, .15f, view(), {1, .2f});
+        reference.frame(1.0 / 120, false, true, 120, .005f, .15f, view(), {1, .2f});
+    }
+    CHECK(!subject.drops().empty());
+    const auto fields = water::download(a);
+    const auto boat = water::download_boat(a);
+    const double time = subject.sim_time();
+    subject.set_depth(.25f);
+    subject.frame(5, true, true, 120, .005f, .15f, view(), {1, .2f});
+    subject.set_depth(3);
+    const auto after = water::download(a);
+    CHECK(fields.eta == after.eta && fields.u == after.u && fields.v == after.v);
+    same_boat(boat, water::download_boat(a), 0);
+    CHECK(subject.sim_time() == time);
+    for (int tick = 0; tick < 180; ++tick) {
+        subject.frame(1.0 / 120, false, true, 120, .005f, .15f, view(), {1, -.2f});
+        reference.frame(1.0 / 120, false, true, 120, .005f, .15f, view(), {1, -.2f});
+        CHECK(subject.sim_time() == reference.sim_time());
+        CHECK(subject.drops().size() == reference.drops().size());
+        for (size_t i = 0; i < subject.drops().size(); ++i) {
+            const auto& x = subject.drops()[i]; const auto& y = reference.drops()[i];
+            CHECK(x.x == y.x && x.z == y.z && x.start == y.start && x.arrival == y.arrival);
+        }
+    }
+    same_boat(water::download_boat(a), water::download_boat(b), 0);
+    same_water(water::download(a), water::download(b));
 }

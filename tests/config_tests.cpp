@@ -169,27 +169,30 @@ TEST_CASE("config", timestep_respects_both_axes_and_quantum) {
         water::Config config;
         config.grid = grid;
         config.impact_radius = 0.75f;
-        const double dx = static_cast<double>(grid.lx) / grid.nx;
-        const double dz = static_cast<double>(grid.lz) / grid.ny;
-        const double rate = std::sqrt(static_cast<double>(config.gravity) * config.depth) *
-                            std::sqrt(1.0 / (dx * dx) + 1.0 / (dz * dz));
+        constexpr double pi = 3.14159265358979323846;
+        const double k = std::hypot(pi * (grid.nx - 1) / grid.lx, pi * (grid.ny - 1) / grid.lz);
+        const double rate = std::sqrt(double(config.gravity) * k * std::tanh(k * config.depth));
         const double dt = water::stable_dt(config);
         CHECK(dt > 0.0);
-        CHECK(dt * rate <= 0.8 + 1e-12);
-        CHECK_NEAR(dt * rate, 0.8, 1e-12);
+        CHECK_NEAR(dt * rate, 1.6, 1e-12);
         const int substeps = water::substeps_per_quantum(config);
         CHECK(substeps >= 1);
         CHECK((1.0 / 120.0) / substeps <= dt);
-        if (substeps > 1) CHECK((1.0 / 120.0) / (substeps - 1) > dt);
+        if (substeps > 1) CHECK(float((1.0 / 120.0) / (substeps - 1)) > dt);
     }
-    water::Config unit_depth;
-    unit_depth.depth = 1;
-    CHECK(water::substeps_per_quantum(unit_depth) == 2);
-    auto coarse = parse({"--depth", "1", "--nx", "96", "--ny", "64", "--radius", "0.75"});
-    CHECK(water::substeps_per_quantum(coarse) == 1);
-    CHECK_NEAR(water::stable_dt(coarse), 0.0355973328, 1e-9);
-    coarse.damping = 100.0f;
-    CHECK_NEAR(water::stable_dt(coarse), 0.0355973328, 1e-9);
+    water::Config shallow;
+    shallow.grid = {8, 8, 40, 40};
+    shallow.impact_radius = 10;
+    shallow.depth = .25f;
+    shallow.impact_strength = .001f;
+    const double k = std::hypot(3.141592653589793 * 7 / 40, 3.141592653589793 * 7 / 40);
+    const double bound = 1.6 / std::sqrt(shallow.gravity * k * std::tanh(k * .25));
+    CHECK_NEAR(water::stable_dt(shallow), bound, 1e-12);
+    const double old_bound = .8 / (std::sqrt(double(shallow.gravity) * shallow.depth) * std::hypot(.2, .2));
+    CHECK(old_bound > bound);
+    shallow.damping = 100;
+    CHECK_NEAR(water::stable_dt(shallow), bound, 1e-12);
+
 }
 
 TEST_CASE("config", timestep_rejects_invalid_or_unrepresentable_substep_counts) {
@@ -198,16 +201,27 @@ TEST_CASE("config", timestep_rejects_invalid_or_unrepresentable_substep_counts) 
     CHECK_THROWS(water::stable_dt(config), std::invalid_argument);
     CHECK_THROWS(water::substeps_per_quantum(config), std::invalid_argument);
     config = water::Config{};
-    config.depth = std::numeric_limits<float>::max();
+    config.gravity = std::numeric_limits<float>::max();
     CHECK_THROWS(water::substeps_per_quantum(config), std::invalid_argument);
 }
 
 TEST_CASE("config", float_timestep_stays_within_cfl_bound_at_subdivision_boundary) {
-    const auto config = parse({"--depth", "1.5178088"});
-    const int substeps = water::substeps_per_quantum(config);
-    const float dt = static_cast<float>((1.0 / 120.0) / substeps);
-    CHECK(dt > 0.0f);
-    CHECK(dt <= water::stable_dt(config));
+    water::Config config;
+    constexpr double pi = 3.14159265358979323846;
+    const double k = std::hypot(pi * (config.grid.nx - 1) / config.grid.lx,
+                              pi * (config.grid.ny - 1) / config.grid.lz);
+    const double target = double(float(1.0 / 120.0));
+    const float boundary = float(std::pow(1.6 / target, 2) / (k * std::tanh(k * config.depth)));
+    int smallest = 100, largest = 0;
+    for (float gravity : {std::nextafter(boundary, 0.f), boundary,
+                          std::nextafter(boundary, std::numeric_limits<float>::infinity())}) {
+        config.gravity = gravity;
+        const int count = water::substeps_per_quantum(config);
+        smallest = std::min(smallest, count); largest = std::max(largest, count);
+        CHECK(float((1.0 / 120.0) / count) <= water::stable_dt(config));
+        if (count > 1) CHECK(float((1.0 / 120.0) / (count - 1)) > water::stable_dt(config));
+    }
+    CHECK(smallest == 1 && largest == 2);
 }
 
 TEST_CASE("config", default_depth_and_interactive_steps) {
@@ -225,4 +239,11 @@ TEST_CASE("config", rain_and_damping_accept_new_interactive_maxima) {
     CHECK(config.rain_rate == 120.0f);
     CHECK(config.damping == 10.0f);
     CHECK(parse({"--damping", "100"}).damping == 100.0f);
+}
+TEST_CASE("config", deep_water_saturates_and_extreme_gravity_rejects_unrepresentable_steps) {
+    water::Config config;
+    config.depth = std::numeric_limits<float>::max();
+    CHECK(water::substeps_per_quantum(config) > 0);
+    config.gravity = std::numeric_limits<float>::max();
+    CHECK_THROWS(water::substeps_per_quantum(config), std::invalid_argument);
 }

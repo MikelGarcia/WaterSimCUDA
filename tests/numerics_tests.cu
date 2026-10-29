@@ -1,3 +1,4 @@
+#include "dispersion_reference.hpp"
 #include "simulation.hpp"
 #include "validation.hpp"
 #include "test_support.hpp"
@@ -68,6 +69,9 @@ void check_walls(const water::Snapshot& state, const water::Config& config) {
 
 double energy(const water::Snapshot& state, const water::Config& config) {
     const auto& g = config.grid;
+    const double k = pi / g.lx;
+    const double keff = 2 * g.nx / double(g.lx) * std::sin(pi / (2 * g.nx));
+    const double modal_depth = k * std::tanh(k * config.depth) / (keff * keff);
     double total = 0.0;
     for (float height : state.eta) {
         CHECK(std::isfinite(height));
@@ -78,7 +82,7 @@ double energy(const water::Snapshot& state, const water::Config& config) {
             const double velocity = state.u[y * (g.nx + 1) + x];
             CHECK(std::isfinite(velocity));
             const double weight = (x == 0 || x == g.nx) ? 0.5 : 1.0;
-            total += weight * config.depth * velocity * velocity;
+            total += weight * modal_depth * velocity * velocity;
         }
     }
     for (int y = 0; y <= g.ny; ++y) {
@@ -86,7 +90,7 @@ double energy(const water::Snapshot& state, const water::Config& config) {
             const double velocity = state.v[y * g.nx + x];
             CHECK(std::isfinite(velocity));
             const double weight = (y == 0 || y == g.ny) ? 0.5 : 1.0;
-            total += weight * config.depth * velocity * velocity;
+            total += weight * modal_depth * velocity * velocity;
         }
     }
     return total * (g.lx / g.nx) * (g.lz / g.ny);
@@ -98,8 +102,8 @@ void check_period(bool along_x, bool transpose, float depth = 1) {
     if (transpose) std::swap(config.grid.nx, config.grid.ny);
     water::Simulation simulation(config);
     water::upload(simulation, mode(config, along_x));
-    const double expected = 2.0 * (along_x ? config.grid.lx : config.grid.lz) /
-                            std::sqrt(config.gravity * config.depth);
+    const double k = pi / (along_x ? config.grid.lx : config.grid.lz);
+    const double expected = 2 * pi / std::sqrt(config.gravity * k * std::tanh(k * config.depth));
     const float dt = time_step(config);
     double previous = 0.001;
     std::vector<double> crossings;
@@ -191,42 +195,6 @@ TEST_CASE("numerics", rectangular_grid_z_mode_has_physical_period) { check_perio
 TEST_CASE("numerics", transposed_grid_x_mode_has_physical_period) { check_period(true, true); }
 TEST_CASE("numerics", transposed_grid_z_mode_has_physical_period) { check_period(false, true); }
 
-TEST_CASE("numerics", positive_pulse_reflects_with_positive_height_and_reversed_flow) {
-    const auto config = fixture();
-    const auto& g = config.grid;
-    auto state = zero_state(config);
-    const double speed = std::sqrt(config.gravity * config.depth);
-    const auto pulse = [](double x) {
-        return 0.001 * std::exp(-std::pow((x - 15.0) / 0.6, 2));
-    };
-    for (int y = 0; y < g.ny; ++y) {
-        for (int x = 0; x < g.nx; ++x) {
-            state.eta[y * g.nx + x] = static_cast<float>(pulse((x + 0.5) * g.lx / g.nx));
-        }
-        for (int x = 1; x < g.nx; ++x) {
-            state.u[y * (g.nx + 1) + x] =
-                static_cast<float>(speed / config.depth * pulse(x * g.lx / g.nx));
-        }
-    }
-    water::Simulation simulation(config);
-    water::upload(simulation, state);
-    const float dt = time_step(config);
-    const int steps = static_cast<int>(std::round(10.0 / speed / dt));
-    for (int i = 0; i < steps; ++i) simulation.step(dt, 0.0f);
-    state = water::download(simulation);
-    double projection = 0.0, normalization = 0.0, flow = 0.0;
-    for (int x = 0; x < g.nx; ++x) {
-        const double shape = pulse((x + 0.5) * g.lx / g.nx);
-        projection += state.eta[x] * shape;
-        normalization += shape * shape;
-        flow += state.u[x] * pulse(x * g.lx / g.nx);
-    }
-    std::cout << "reflected pulse amplitude ratio: " << projection / normalization << '\n';
-    CHECK(projection / normalization > 0.8);
-    CHECK(flow < 0.0);
-    check_walls(state, config);
-}
-
 TEST_CASE("numerics", damping_reduces_modal_energy_below_40_percent_after_five_seconds) {
     const auto config = fixture();
     water::Simulation control(config), damped(config);
@@ -249,7 +217,8 @@ TEST_CASE("numerics", undamped_energy_stays_bounded_for_ten_periods) {
     const auto initial = mode(config, true);
     water::upload(simulation, initial);
     const double initial_energy = energy(initial, config);
-    const double period = 40.0 / std::sqrt(config.gravity * config.depth);
+    const double k = pi / config.grid.lx;
+    const double period = 2 * pi / std::sqrt(config.gravity * k * std::tanh(k * config.depth));
     const float dt = time_step(config);
     double maximum = initial_energy;
     for (int i = 0; i < static_cast<int>(std::ceil(10.0 * period / dt)); ++i) {
@@ -299,14 +268,15 @@ TEST_CASE("numerics", live_depth_preserves_fields_and_updates_validation_and_cfl
     const water::Impact too_strong{10, 6, .75f, .006f};
     CHECK_THROWS(simulation.apply_impacts(&too_strong, 1), std::invalid_argument);
     for (float depth : {0.f, -1.f, std::numeric_limits<float>::infinity(),
-                        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::max()}) {
+                        std::numeric_limits<float>::quiet_NaN()}) {
         CHECK_THROWS(simulation.set_depth(depth), std::invalid_argument);
         CHECK(simulation.config().depth == .25f);
         after = water::download(simulation);
         CHECK(after.eta == initial.eta && after.u == initial.u && after.v == initial.v);
     }
     simulation.set_depth(100);
-    CHECK_THROWS(simulation.step(1.f / 120, 0), std::invalid_argument);
+    float above = std::nextafter(float(water::stable_dt(simulation.config())), std::numeric_limits<float>::infinity());
+    CHECK_THROWS(simulation.step(above, 0), std::invalid_argument);
     simulation.reset();
     CHECK(simulation.config().depth == 100);
     for (float depth : {.25f, 1.5178088f, 3.f, 100.f}) {
@@ -318,104 +288,115 @@ TEST_CASE("numerics", live_depth_preserves_fields_and_updates_validation_and_cfl
     }
 }
 
-TEST_CASE("numerics", nonzero_fields_follow_independent_linear_swe) {
-    water::Config c;
-    c.grid = {80, 64, 4, 3};
-    c.impact_radius = .15f;
-    water::Simulation simulation(c);
-    auto expected = water::download(simulation);
-    const auto& g = c.grid;
-    const double dx = double(g.lx) / g.nx, dz = double(g.lz) / g.ny;
-    for (int z = 0; z < g.ny; ++z)
-        for (int x = 0; x < g.nx; ++x)
-            expected.eta[z * g.nx + x] = float(.001 * std::cos(pi * (x + .5) / g.nx) *
-                                                    std::cos(pi * (z + .5) / g.ny));
-    for (int z = 0; z < g.ny; ++z)
-        for (int x = 1; x < g.nx; ++x)
-            expected.u[z * (g.nx + 1) + x] = float(.0003 * std::sin(pi * x / g.nx));
-    for (int z = 1; z < g.ny; ++z)
-        for (int x = 0; x < g.nx; ++x)
-            expected.v[z * g.nx + x] = float(-.0002 * std::sin(pi * z / g.ny));
-    water::upload(simulation, expected);
-    constexpr float dt = .001f;
-    double max_error = 0;
-    for (int step = 0; step < 200; ++step) {
-        auto next = expected;
-        for (int z = 0; z < g.ny; ++z) {
-            for (int x = 1; x < g.nx; ++x) {
-                const int i = z * (g.nx + 1) + x;
-                const double gradient = (expected.eta[z * g.nx + x] -
-                                         double(expected.eta[z * g.nx + x - 1])) / dx;
-                next.u[i] = float((expected.u[i] - c.gravity * double(dt) * gradient) /
-                                  (1 + c.damping * double(dt)));
-            }
-        }
-        for (int z = 1; z < g.ny; ++z) {
-            for (int x = 0; x < g.nx; ++x) {
-                const int i = z * g.nx + x;
-                const double gradient = (expected.eta[i] - double(expected.eta[i - g.nx])) / dz;
-                next.v[i] = float((expected.v[i] - c.gravity * double(dt) * gradient) /
-                                  (1 + c.damping * double(dt)));
-            }
-        }
-        for (int z = 0; z < g.ny; ++z) {
-            for (int x = 0; x < g.nx; ++x) {
-                const double divergence =
-                    (next.u[z * (g.nx + 1) + x + 1] - double(next.u[z * (g.nx + 1) + x])) / dx +
-                    (next.v[(z + 1) * g.nx + x] - double(next.v[z * g.nx + x])) / dz;
-                next.eta[z * g.nx + x] = float(expected.eta[z * g.nx + x] - c.depth * double(dt) * divergence);
-            }
-        }
-        expected = next;
-        simulation.step(dt, c.damping);
-        const auto actual = water::download(simulation);
-        for (size_t i = 0; i < actual.eta.size(); ++i)
-            max_error = std::max(max_error, std::abs(double(actual.eta[i]) - expected.eta[i]));
-        for (size_t i = 0; i < actual.u.size(); ++i)
-            max_error = std::max(max_error, std::abs(double(actual.u[i]) - expected.u[i]));
-        for (size_t i = 0; i < actual.v.size(); ++i)
-            max_error = std::max(max_error, std::abs(double(actual.v[i]) - expected.v[i]));
-    }
-    std::cout << "CPU linear SWE maximum absolute error=" << max_error << '\n';
-    CHECK(max_error < 1e-8);
-}
 
-TEST_CASE("numerics", released_one_dimensional_wave_has_analytic_speed) {
+namespace {
+water::Config packet_config(int nx) {
     water::Config c;
-    c.grid = {512, 32, 20, 12};
-    c.impact_radius = .8f;
-    water::Simulation simulation(c);
-    auto initial = water::download(simulation);
-    const double speed = std::sqrt(c.gravity * c.depth);
-    const auto pulse = [](double x) { return .001 * std::exp(-std::pow((x - 7) / .6, 2)); };
-    for (int z = 0; z < c.grid.ny; ++z) {
-        for (int x = 0; x < c.grid.nx; ++x)
-            initial.eta[z * c.grid.nx + x] = float(pulse((x + .5) * c.grid.lx / c.grid.nx));
-        for (int x = 1; x < c.grid.nx; ++x)
-            initial.u[z * (c.grid.nx + 1) + x] = float(speed / c.depth * pulse(x * c.grid.lx / c.grid.nx));
+    c.grid = {nx, 8, 100, 10}; c.impact_radius = 2.5f; c.depth = 6;
+    return c;
+}
+water::Snapshot packet(const water::Config& c, double center, float dt, int steps) {
+    auto state = zero_state(c);
+    const auto& g = c.grid;
+    for (int m = 36; m <= 92; ++m) {
+        const double k = pi * m / g.lx;
+        const double keff = 2 * g.nx / double(g.lx) * std::sin(pi * m / (2 * g.nx));
+        const double omega = std::sqrt(c.gravity * k * std::tanh(k * c.depth));
+        const double theta = 2 * std::asin(.5 * omega * dt);
+        const double a = .0001 * std::exp(-.5 * std::pow((m - 64) / 5.0, 2));
+        const double phase = k * center + steps * theta;
+        // Stored momentum lags height by half the discrete modal phase.
+        for (int y = 0; y < g.ny; ++y) {
+            for (int x = 0; x < g.nx; ++x)
+                state.eta[y * g.nx + x] += float(a * std::cos(phase) * std::cos(k * (x + .5) * g.lx / g.nx));
+            for (int x = 1; x < g.nx; ++x)
+                state.u[y * (g.nx + 1) + x] += float(a * c.gravity * keff / omega *
+                    std::sin(phase - .5 * theta) * std::sin(pi * m * x / g.nx));
+        }
     }
-    water::upload(simulation, initial);
-    const float dt = float(water::stable_dt(c)) * .8f;
-    float elapsed = 0;
-    for (float target : {.2f, .4f, .6f}) {
-        while (elapsed < target) {
-            simulation.step(dt, 0);
-            elapsed += dt;
+    return state;
+}
+double packet_centroid(const water::Snapshot& s, const water::Config& c) {
+    const auto& g = c.grid;
+    const double k = pi * 64 / g.lx;
+    const double keff = 2 * g.nx / double(g.lx) * std::sin(pi * 64 / (2 * g.nx));
+    const double impedance = std::sqrt(c.gravity * k * std::tanh(k * c.depth)) / (c.gravity * keff);
+    double sum = 0, weighted = 0;
+    for (int x = 0; x < g.nx; ++x) {
+        const double velocity = .5 * (s.u[x] + s.u[x + 1]);
+        const double energy = s.eta[x] * double(s.eta[x]) + std::pow(impedance * velocity, 2);
+        sum += energy; weighted += energy * (x + .5) * g.lx / g.nx;
+    }
+    return weighted / sum;
+}
+double packet_phase(const water::Snapshot& s, const water::Config& c, float dt) {
+    const auto& g = c.grid;
+    const double k = pi * 64 / g.lx;
+    const double keff = 2 * g.nx / double(g.lx) * std::sin(pi * 64 / (2 * g.nx));
+    const double omega = std::sqrt(c.gravity * k * std::tanh(k * c.depth));
+    double eta = 0, u = 0;
+    for (int x = 0; x < g.nx; ++x) eta += s.eta[x] * std::cos(pi * 64 * (x + .5) / g.nx);
+    for (int x = 1; x < g.nx; ++x) u += s.u[x] * std::sin(pi * 64 * x / g.nx) * omega / (c.gravity * keff);
+    const double half = std::asin(.5 * omega * dt);
+    return std::atan2((u + eta * std::sin(half)) / std::cos(half), eta);
+}
+}
+TEST_CASE("numerics", narrow_band_packet_separates_group_and_crest_phase_speeds) {
+    for (int refinement : {1, 2}) {
+        const auto c = packet_config(256 * refinement);
+        const float dt = time_step(c) / refinement;
+        water::Simulation sim(c);
+        const auto initial = packet(c, 30, dt, 0);
+        water::upload(sim, initial);
+        const double start = packet_centroid(initial, c);
+        double previous = packet_phase(initial, c, dt), accumulated = 0;
+        const int steps = int(4 / dt);
+        for (int i = 0; i < steps; ++i) {
+            sim.step(dt, 0);
+            if ((i + 1) % 20 == 0 || i + 1 == steps) {
+                const double phase = packet_phase(water::download(sim), c, dt);
+                accumulated += std::remainder(phase - previous, 2 * pi);
+                previous = phase;
+            }
         }
-        const auto actual = water::download(simulation);
-        double squared_error = 0, norm = 0;
-        int maximum = 0;
+        const auto final = water::download(sim);
+        const double k = pi * 64 / c.grid.lx;
+        const double omega = std::sqrt(c.gravity * k * std::tanh(k * c.depth));
+        const double phase_speed = omega / k;
+        const double kh = k * c.depth;
+        const double group_speed = .5 * phase_speed * (1 + 2 * kh / std::sinh(2 * kh));
+        const double measured_group = (packet_centroid(final, c) - start) / (steps * dt);
+        const double measured_phase = accumulated / (steps * dt * k);
+        std::cout << "PACKET refine=" << refinement << " group=" << measured_group << " expected=" << group_speed
+                  << " phase=" << measured_phase << " expected=" << phase_speed << '\n';
+        CHECK(std::abs(measured_group / group_speed - 1) < .05);
+        CHECK(std::abs(measured_phase / phase_speed - 1) < .05);
+        CHECK(std::abs(measured_group / measured_phase - .5) < .03);
+    }
+}
+TEST_CASE("numerics", cosine_packet_reflects_at_wall_without_periodic_wrap) {
+    const auto c = packet_config(512);
+    const float dt = time_step(c);
+    water::Simulation sim(c);
+    water::upload(sim, packet(c, 90, dt, 0));
+    const double k = pi * 64 / c.grid.lx;
+    const double group = .5 * std::sqrt(c.gravity / k);
+    int completed = 0;
+    for (double target : {10 / group, 20 / group}) {
+        const int steps = int(target / dt);
+        for (; completed < steps; ++completed) sim.step(dt, 0);
+        const auto got = water::download(sim), expected = packet(c, 90, dt, completed);
+        double error = 0, norm = 0, left = 0, right = 0;
         for (int x = 0; x < c.grid.nx; ++x) {
-            const double expected = pulse((x + .5) * c.grid.lx / c.grid.nx - speed * elapsed);
-            squared_error += std::pow(actual.eta[x] - expected, 2);
-            norm += expected * expected;
-            if (actual.eta[x] > actual.eta[maximum]) maximum = x;
+            error += std::pow(got.eta[x] - expected.eta[x], 2);
+            norm += std::pow(expected.eta[x], 2);
+            if (x < c.grid.nx / 5) left += got.eta[x] * double(got.eta[x]);
+            if (x > 4 * c.grid.nx / 5) right += got.eta[x] * double(got.eta[x]);
         }
-        const double peak_position = (maximum + .5) * c.grid.lx / c.grid.nx;
-        const double error = std::sqrt(squared_error / norm);
-        std::cout << "ANALYTIC time=" << elapsed << " peak position=" << peak_position
-                  << " expected=" << 7 + speed * elapsed << " relative L2=" << error << '\n';
-        CHECK(std::abs(peak_position - (7 + speed * elapsed)) < 2 * c.grid.lx / c.grid.nx);
-        CHECK(error < .03);
+        std::cout << "REFLECTION t=" << completed * dt << " relative_L2=" << std::sqrt(error / norm)
+                  << " left/right=" << left / right << '\n';
+        CHECK(std::sqrt(error / norm) < .001);
+        CHECK(left < .01 * right);
+        check_walls(got, c);
     }
 }

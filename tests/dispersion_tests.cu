@@ -2,6 +2,7 @@
 #include "dispersion_reference.hpp"
 #include "test_support.hpp"
 #include <algorithm>
+#include <cstring>
 #include <iostream>
 #include <cctype>
 #include <limits>
@@ -274,4 +275,169 @@ TEST_CASE("fft", large_prime_plans_execute_with_deployed_runtime) {
                 CHECK_NEAR(eta[y * nx + x], amplitude * std::cos(pi * m * (x + 0.5) / nx), 2e-7);
     }
     checked(cudaStreamDestroy(stream));
+}
+TEST_CASE("dispersion", complete_staggered_steps_match_cosine_reference) {
+    constexpr double pi = 3.14159265358979323846;
+    for (water::Grid grid : {water::Grid{8, 12, 4, 6}, water::Grid{12, 8, 6, 4}})
+        for (float depth : {.25f, 3.f, 6.f})
+            for (float damping : {0.f, 2.5f}) {
+                water::Config config;
+                config.grid = grid;
+                config.depth = depth;
+                config.impact_radius = 1;
+                config.impact_strength = .001f;
+                water::Simulation simulation(config);
+                auto expected = water::download(simulation);
+                for (int y = 0; y < grid.ny; ++y)
+                    for (int x = 0; x < grid.nx; ++x)
+                        expected.eta[y * grid.nx + x] = float(.001 + .003 * std::cos(pi * (x + .5) / grid.nx) +
+                            .002 * std::cos(pi * (grid.nx - 1) * (x + .5) / grid.nx) *
+                            std::cos(pi * (grid.ny - 1) * (y + .5) / grid.ny));
+                for (size_t i = 0; i < expected.u.size(); ++i) expected.u[i] = float(.002 * std::sin(.7 * i));
+                for (size_t i = 0; i < expected.v.size(); ++i) expected.v[i] = float(.003 * std::cos(.9 * i));
+                water::upload(simulation, expected);
+                const float dt = .003f;
+                double error = 0, scale = 0;
+                for (int step = 0; step < 6; ++step) {
+                    expected = reference::step(config, expected, dt, damping);
+                    simulation.step(dt, damping);
+                    const auto actual = water::download(simulation);
+                    for (int y = 0; y < grid.ny; ++y) {
+                        CHECK(actual.u[y * (grid.nx + 1)] == 0);
+                        CHECK(actual.u[y * (grid.nx + 1) + grid.nx] == 0);
+                    }
+                    for (int x = 0; x < grid.nx; ++x) {
+                        CHECK(actual.v[x] == 0);
+                        CHECK(actual.v[grid.ny * grid.nx + x] == 0);
+                    }
+                    const std::vector<float>* want[] = {&expected.eta, &expected.u, &expected.v};
+                    const std::vector<float>* got[] = {&actual.eta, &actual.u, &actual.v};
+                    for (int a = 0; a < 3; ++a)
+                        for (size_t i = 0; i < got[a]->size(); ++i) {
+                            error = std::max(error, std::abs(double((*got[a])[i]) - (*want[a])[i]));
+                            scale = std::max(scale, std::abs(double((*want[a])[i])));
+                        }
+                }
+                std::cout << "COMPLETE " << grid.nx << 'x' << grid.ny << " H=" << depth
+                          << " damping=" << damping << " error=" << error << " scale=" << scale << '\n';
+                CHECK(error <= 2e-7 + 3e-5 * scale);
+            }
+}
+namespace {
+double modal_period_error(water::Config c, int m, int n, int refinement) {
+    constexpr double pi = 3.14159265358979323846;
+    water::Simulation sim(c);
+    auto state = water::download(sim);
+    for (int y = 0; y < c.grid.ny; ++y)
+        for (int x = 0; x < c.grid.nx; ++x)
+            state.eta[y * c.grid.nx + x] = float(.001 * std::cos(pi * m * (x + .5) / c.grid.nx) *
+                std::cos(pi * n * (y + .5) / c.grid.ny));
+    water::upload(sim, state);
+    const double k = std::hypot(pi * m / c.grid.lx, pi * n / c.grid.lz);
+    const double omega = std::sqrt(c.gravity * k * std::tanh(k * c.depth));
+    const double period = 2 * pi / omega;
+    const float dt = float((1.0 / 120) / water::substeps_per_quantum(c) / refinement);
+    double previous = .001, crossings[2]{};
+    int count = 0;
+    for (int step = 1; step * dt < 2.5 * period && count < 2; ++step) {
+        sim.step(dt, 0);
+        state = water::download(sim);
+        double projection = 0;
+        for (int y = 0; y < c.grid.ny; ++y)
+            for (int x = 0; x < c.grid.nx; ++x)
+                projection += state.eta[y * c.grid.nx + x] * std::cos(pi * m * (x + .5) / c.grid.nx) *
+                    std::cos(pi * n * (y + .5) / c.grid.ny);
+        projection *= (m ? 2.0 : 1) * (n ? 2.0 : 1) / (c.grid.nx * c.grid.ny);
+        if (previous > 0 && projection <= 0)
+            crossings[count++] = (step - 1 + previous / (previous - projection)) * dt;
+        previous = projection;
+    }
+    CHECK(count == 2);
+    const double error = std::abs((crossings[1] - crossings[0]) / period - 1);
+    std::cout << "MODE " << m << ',' << n << " omega=" << omega << " dt=" << dt << " period_error=" << error << '\n';
+    return error;
+}
+}
+TEST_CASE("dispersion", modal_periods_refine_toward_finite_depth_dispersion) {
+    water::Config c;
+    c.grid = {32, 24, 4, 3};
+    c.impact_radius = .25f;
+    for (auto mn : {std::pair<int,int>{1,0}, {0,2}, {3,4}, {31,23}}) {
+        const double coarse = modal_period_error(c, mn.first, mn.second, 1);
+        const double fine = modal_period_error(c, mn.first, mn.second, 2);
+        CHECK(coarse < .03);
+        CHECK(fine < coarse * .5);
+    }
+}
+TEST_CASE("dispersion", genuinely_long_modes_recover_shallow_water_limit) {
+    water::Config c;
+    c.grid = {16, 8, 400, 200};
+    c.depth = .25f;
+    c.impact_radius = 50;
+    c.impact_strength = .001f;
+    constexpr double pi = 3.14159265358979323846;
+    const double k = pi / c.grid.lx;
+    CHECK(k * c.depth < .002);
+    CHECK_NEAR(std::sqrt(c.gravity * k * std::tanh(k * c.depth)) /
+               (k * std::sqrt(c.gravity * c.depth)), 1, 1e-6);
+    // Increase gravity to observe the same small-kH mode in a short deterministic run.
+    c.gravity = 98100;
+    CHECK(modal_period_error(c, 1, 0, 1) < .03);
+}
+TEST_CASE("dispersion", depth_refresh_preserves_state_and_reuses_fft_resources) {
+    water::Config c;
+    c.grid = {8, 12, 4, 6};
+    c.impact_radius = 1;
+    c.impact_strength = .001f;
+    water::Simulation sim(c), other(c);
+    auto state = water::download(sim);
+    for (size_t i = 0; i < state.eta.size(); ++i) state.eta[i] = float(.001 * std::cos(.3 * i));
+    for (size_t i = 0; i < state.u.size(); ++i) state.u[i] = float(.002 * std::sin(.7 * i));
+    water::upload(sim, state);
+    const auto boat = water::download_boat(sim);
+    const auto resources = water::fft_resources(sim), separate = water::fft_resources(other);
+    CHECK(resources.forward_plan != separate.forward_plan);
+    CHECK(resources.real_bytes == 4 * 8 * 12 * sizeof(float));
+    CHECK(resources.spectral_bytes == 2 * 12 * 9 * 2 * sizeof(float));
+    CHECK(resources.weights_bytes == 2 * 2 * 12 * 9 * sizeof(float));
+    for (float h : {.25f, 6.f, 3.f, std::numeric_limits<float>::max()}) {
+        sim.set_depth(h);
+        const auto current = water::download(sim);
+        CHECK(current.eta == state.eta && current.u == state.u && current.v == state.v);
+        const auto current_boat = water::download_boat(sim);
+        CHECK(std::memcmp(&boat, &current_boat, sizeof(boat)) == 0);
+        const auto now = water::fft_resources(sim);
+        CHECK(now.forward_plan == resources.forward_plan && now.inverse_plan == resources.inverse_plan);
+        CHECK(now.workspace == resources.workspace && now.workspace_bytes == resources.workspace_bytes);
+    }
+    for (float h : {0.f, -1.f, std::numeric_limits<float>::quiet_NaN()})
+        CHECK_THROWS(sim.set_depth(h), std::invalid_argument);
+    sim.set_depth(.25f);
+    c = sim.config();
+    const auto expected = reference::step(c, state, .003f, 2.5f);
+    sim.step(.003f, 2.5f);
+    const auto actual = water::download(sim);
+    for (size_t i = 0; i < actual.eta.size(); ++i) CHECK_NEAR(actual.eta[i], expected.eta[i], 2e-7);
+    for (size_t i = 0; i < actual.u.size(); ++i) CHECK_NEAR(actual.u[i], expected.u[i], 2e-7);
+    for (size_t i = 0; i < actual.v.size(); ++i) CHECK_NEAR(actual.v[i], expected.v[i], 2e-7);
+    sim.reset();
+    CHECK(water::fft_resources(sim).forward_plan == resources.forward_plan);
+    CHECK(water::fft_resources(sim).workspace == resources.workspace);
+}
+TEST_CASE("dispersion", borrowed_fft_events_time_only_the_queued_transform_pair) {
+    water::Config c;
+    c.grid = {8, 12, 4, 6}; c.impact_radius = 1;
+    water::Simulation sim(c);
+    cudaEvent_t begin, end;
+    checked(cudaEventCreate(&begin)); checked(cudaEventCreate(&end));
+    CHECK_THROWS(water::set_fft_timing_events(sim, begin, nullptr), std::invalid_argument);
+    water::set_fft_timing_events(sim, begin, end);
+    sim.step(.003f, 0);
+    checked(cudaEventSynchronize(end));
+    float ms;
+    checked(cudaEventElapsedTime(&ms, begin, end)); CHECK(ms >= 0);
+    water::set_fft_timing_events(sim, nullptr, nullptr);
+    checked(cudaStreamSynchronize(sim.stream()));
+    checked(cudaEventDestroy(end)); checked(cudaEventDestroy(begin));
+    sim.step(.003f, 0);
 }

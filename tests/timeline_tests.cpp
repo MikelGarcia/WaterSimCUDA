@@ -385,8 +385,10 @@ TEST_CASE("timeline", depth_changes_preserve_flights_random_schedule_and_strengt
     }
     CHECK_THROWS(actual.tick(.6, true, 60, .006f, view()), std::invalid_argument);
     for (float invalid : {0.f, std::numeric_limits<float>::infinity(),
-                          std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::max()})
+                          std::numeric_limits<float>::quiet_NaN()})
         CHECK_THROWS(actual.set_depth(invalid), std::invalid_argument);
+    actual.set_depth(std::numeric_limits<float>::max());
+    actual.set_depth(.25f);
     actual.tick(.6, true, 60, .005f, view());
     reference.tick(.6, true, 60, .005f, view());
     CHECK(actual.active().size() == reference.active().size());

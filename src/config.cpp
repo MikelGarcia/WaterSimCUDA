@@ -107,20 +107,20 @@ float adjust_reflection(float current, int steps) {
 
 double stable_dt(const Config& config) {
     validate(config);
-    const double dx = static_cast<double>(config.grid.lx) / config.grid.nx;
-    const double dz = static_cast<double>(config.grid.lz) / config.grid.ny;
-    const double wave_speed = std::sqrt(static_cast<double>(config.gravity) * config.depth);
-    return 0.8 / (wave_speed * std::sqrt(1.0 / (dx * dx) + 1.0 / (dz * dz)));
+    constexpr double pi = 3.14159265358979323846;
+    const double k = std::hypot(pi * (config.grid.nx - 1) / config.grid.lx,
+                                pi * (config.grid.ny - 1) / config.grid.lz);
+    return 1.6 / std::sqrt(double(config.gravity) * k * std::tanh(k * config.depth));
 }
 
 int substeps_per_quantum(const Config& config) {
     const double max_dt = stable_dt(config);
     const double required = std::ceil((1.0 / 120.0) / max_dt);
-    if (required > std::numeric_limits<int>::max()) {
+    if (!std::isfinite(required) || required > std::numeric_limits<int>::max()) {
         throw std::invalid_argument("configuration requires too many substeps per quantum");
     }
     int substeps = std::max(1, static_cast<int>(required));
-    // The controller's float timestep can round above the double CFL bound.
+    // The controller's float timestep can round above the double stability bound.
     while (static_cast<float>((1.0 / 120.0) / substeps) > max_dt) {
         if (substeps == std::numeric_limits<int>::max()) {
             throw std::invalid_argument("configuration requires too many substeps per quantum");

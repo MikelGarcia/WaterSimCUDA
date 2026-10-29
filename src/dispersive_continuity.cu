@@ -141,10 +141,12 @@ void DispersiveContinuity::advance(float* eta, const float* u, const float* v, f
     const int complex_count = 2 * grid_.ny * (grid_.nx + 1);
     mirror_divergence<<<(real_count + 255) / 256, 256, 0, stream_>>>(real_, u, v, grid_);
     check(cudaGetLastError(), "mirror staggered divergence");
+    if (timing_begin_) check(cudaEventRecord(timing_begin_, stream_), "record FFT begin");
     check_fft(cufftExecR2C(forward_, real_, spectrum_), "execute divergence R2C FFT");
     multiply<<<(complex_count + 255) / 256, 256, 0, stream_>>>(spectrum_, weights_[active_], complex_count);
     check(cudaGetLastError(), "apply dispersive depth multiplier");
     check_fft(cufftExecC2R(inverse_, spectrum_, real_), "execute divergence C2R FFT");
+    if (timing_end_) check(cudaEventRecord(timing_end_, stream_), "record FFT end");
     crop<<<(grid_.nx * grid_.ny + 255) / 256, 256, 0, stream_>>>(eta, real_, grid_, dt);
     check(cudaGetLastError(), "apply normalized continuity response");
 }

@@ -7,6 +7,9 @@
 
 namespace water {
 
+class Simulation;
+struct FftResources;
+
 class DispersiveContinuity {
   public:
     // The borrowed stream must outlive this object.
@@ -19,6 +22,8 @@ class DispersiveContinuity {
 
   private:
     friend struct ContinuityObservation;
+    friend FftResources fft_resources(const Simulation&);
+    friend void set_fft_timing_events(Simulation&, cudaEvent_t, cudaEvent_t);
     void release() noexcept;
     Grid grid_;
     cudaStream_t stream_;
@@ -28,6 +33,7 @@ class DispersiveContinuity {
     float* weights_[2] = {nullptr, nullptr};
     void* workspace_ = nullptr;
     std::size_t workspace_bytes_ = 0;
+    cudaEvent_t timing_begin_ = nullptr, timing_end_ = nullptr;
     int active_ = 0;
     float depth_ = 0;
 };

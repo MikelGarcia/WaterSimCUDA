@@ -1,4 +1,5 @@
 #include "validation.hpp"
+#include "dispersive_continuity.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -13,6 +14,20 @@ void check(cudaError_t error, const char* operation) {
 }
 
 } // namespace
+
+FftResources fft_resources(const Simulation& simulation) {
+    const auto& op = *simulation.continuity_;
+    const auto& g = op.grid_;
+    const std::size_t spectral_count = 2 * std::size_t(g.ny) * (g.nx + 1);
+    return {op.forward_, op.inverse_, op.workspace_, 4 * std::size_t(g.nx) * g.ny * sizeof(float),
+            spectral_count * sizeof(cufftComplex), 2 * spectral_count * sizeof(float), op.workspace_bytes_};
+}
+
+void set_fft_timing_events(Simulation& simulation, cudaEvent_t begin, cudaEvent_t end) {
+    if (bool(begin) != bool(end)) throw std::invalid_argument("FFT timing requires an event pair");
+    simulation.continuity_->timing_begin_ = begin;
+    simulation.continuity_->timing_end_ = end;
+}
 
 BoatState download_boat(const Simulation& simulation) {
     BoatState state;

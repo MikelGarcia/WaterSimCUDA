@@ -4,10 +4,13 @@
 #include "boat.hpp"
 #include <cuda_runtime_api.h>
 #include <cstddef>
+#include <memory>
 
 namespace water {
 
 struct Snapshot;
+struct FftResources;
+class DispersiveContinuity;
 
 struct Impact {
     float x, z, radius, strength;
@@ -38,11 +41,14 @@ private:
     friend void upload_boat(Simulation& simulation, const BoatState& state);
     friend Snapshot download(const Simulation& simulation);
     friend void upload(Simulation& simulation, const Snapshot& state);
+    friend FftResources fft_resources(const Simulation&);
+    friend void set_fft_timing_events(Simulation&, cudaEvent_t, cudaEvent_t);
     void release() noexcept;
 
     Config config_;
     double max_dt_;
     cudaStream_t stream_ = nullptr;
+    std::unique_ptr<DispersiveContinuity> continuity_;
     float* eta_ = nullptr;
     float* u_ = nullptr;
     float* v_ = nullptr;

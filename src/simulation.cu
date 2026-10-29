@@ -1,4 +1,5 @@
 #include "simulation.hpp"
+#include "dispersive_continuity.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -263,17 +264,6 @@ __global__ void update_velocity(const float* eta, float* u, float* v,
     }
 }
 
-__global__ void update_height(float* eta, const float* u, const float* v,
-                              int nx, int ny, float dx, float dz, float depth_dt) {
-    const int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= nx * ny) return;
-    const int x = i % nx;
-    const int y = i / nx;
-    const float divergence = (u[y * (nx + 1) + x + 1] - u[y * (nx + 1) + x]) / dx +
-                             (v[(y + 1) * nx + x] - v[y * nx + x]) / dz;
-    eta[i] -= depth_dt * divergence;
-}
-
 __device__ float node_height(const float* eta, int x, int z, int nx, int ny) {
     float height = 0.0f;
     int count = 0;
@@ -326,6 +316,7 @@ Simulation::Simulation(const Config& config) : config_(config), max_dt_(stable_d
     }
     try {
         check(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking), "create simulation stream");
+        continuity_ = std::make_unique<DispersiveContinuity>(config_, stream_);
         check(cudaMalloc(&eta_, sizeof(float) * g.nx * g.ny), "allocate heights");
         check(cudaMalloc(&u_, sizeof(float) * (g.nx + 1) * g.ny), "allocate x velocities");
         check(cudaMalloc(&v_, sizeof(float) * g.nx * (g.ny + 1)), "allocate z velocities");
@@ -389,6 +380,7 @@ void Simulation::apply_impacts(const Impact* host_events, std::size_t count) {
 }
 
 void Simulation::release() noexcept {
+    continuity_.reset();
     if (boat_) check_cleanup(cudaFree(boat_), "free boat");
     if (eta_) check_cleanup(cudaFree(eta_), "free heights");
     if (u_) check_cleanup(cudaFree(u_), "free x velocities");
@@ -403,6 +395,7 @@ void Simulation::set_depth(float depth) {
     next.impact_strength = std::min(next.impact_strength, 0.02f * depth);
     substeps_per_quantum(next);
     const double max_dt = stable_dt(next);
+    continuity_->set_depth(depth);
     config_ = next;
     max_dt_ = max_dt;
 }
@@ -427,7 +420,7 @@ void Simulation::write_boat_transform(float* device_column_major, std::size_t fl
 
 void Simulation::step(float dt, float damping, BoatControl control) {
     if (!std::isfinite(dt) || dt <= 0.0f || dt > max_dt_) {
-        throw std::invalid_argument("step dt must be finite, positive, and within the current CFL bound");
+        throw std::invalid_argument("step dt must be finite, positive, and within the current stability bound");
     }
     if (!std::isfinite(damping) || damping < 0.0f) {
         throw std::invalid_argument("step damping must be finite and nonnegative");
@@ -447,9 +440,7 @@ void Simulation::step(float dt, float damping, BoatControl control) {
         eta_, u_, v_, g.nx, g.ny, dx, dz, config_.gravity * dt, 1.0f + damping * dt,
         boat_, config_.depth);
     check(cudaGetLastError(), "launch velocity update");
-    update_height<<<(g.nx * g.ny + threads - 1) / threads, threads, 0, stream_>>>(
-        eta_, u_, v_, g.nx, g.ny, dx, dz, config_.depth * dt);
-    check(cudaGetLastError(), "launch height update");
+    continuity_->advance(eta_, u_, v_, dt);
 }
 
 } // namespace water
