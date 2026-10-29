@@ -26,6 +26,7 @@ void advance(water::Simulation& s, int count, water::BoatControl control = {},
 void inside(const water::BoatState& b, const water::Grid& g) {
     CHECK(std::isfinite(b.x) && std::isfinite(b.z) && std::isfinite(b.yaw));
     CHECK(std::isfinite(b.yaw_rate));
+    CHECK(std::isfinite(b.wake_phase) && b.wake_phase >= 0 && b.wake_phase < 6.28318530718f);
     CHECK(speed(b) <= 1.87501f);
     for (int i : {-1, 1})
         for (int j : {-1, 1}) {

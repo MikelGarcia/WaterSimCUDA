@@ -128,7 +128,10 @@ __global__ void update_boat(BoatState* boat, BoatControl control, float dt, floa
         if (contact & ~previous_contact) rate *= 0.20f;
         previous_contact = contact;
         previous_translation_contact = translation_contact;
-        b = {x, z, yaw, vx, vz, rate};
+        const float phase = fmodf(b.wake_phase + 6.28318530718f *
+                                  hypotf(x - b.x, z - b.z) / boat_geometry.length,
+                                  6.28318530718f);
+        b = {x, z, yaw, vx, vz, rate, phase};
     }
     *boat = b;
 }
@@ -229,7 +232,13 @@ __device__ float wake_head(float x, float z, const BoatState& b,
     const float blend = smooth_gain((b.vx * c + b.vz * s + .01f) / .02f);
     const float amplitude = .002f * (speed_squared / (1.875f * 1.875f)) *
         smooth_gain((sqrtf(speed_squared) - .0001f) / .0099f) * fminf(1, depth / 1.0f);
-    return amplitude * (blend * bow + (1 - blend) * stern);
+    // Bounded stern shedding radiates waves even for a subcritical translating hull.
+    const float aft = wake_bump((l + .8f * length) / (.5f * length));
+    const float fore = wake_bump((l - .8f * length) / (.5f * length));
+    const float shedding = .01f * (speed_squared / (1.875f * 1.875f)) *
+        smooth_gain((sqrtf(speed_squared) - .0001f) / .0099f) * fminf(1, depth / 3.0f) *
+        sinf(b.wake_phase) * (blend * aft + (1 - blend) * fore) * wake_bump(t / (1.5f * width));
+    return amplitude * (blend * bow + (1 - blend) * stern) + shedding;
 }
 
 __global__ void update_velocity(const float* eta, float* u, float* v,

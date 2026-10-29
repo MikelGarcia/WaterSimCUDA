@@ -13,6 +13,8 @@
 #include <fstream>
 #include <filesystem>
 
+
+
 namespace {
 
 struct Context {
@@ -1185,6 +1187,7 @@ TEST_CASE("appearance", driven_real_boat_contacts_and_escapes_every_wall_and_cor
     app.frame(1, true, true, 120, .005f, 10, spawn_view, {1, 1});
     const auto paused = water::download_boat(simulation);
     CHECK(before_pause.x == paused.x && before_pause.z == paused.z && before_pause.yaw == paused.yaw);
+    CHECK(before_pause.wake_phase == paused.wake_phase);
     app.set_depth(.5f);
     scene.set_depth(.5f);
     app.reset();
@@ -1192,4 +1195,68 @@ TEST_CASE("appearance", driven_real_boat_contacts_and_escapes_every_wall_and_cor
     CHECK(reset.x == 2 && reset.z == 1.5f && reset.vx == 0 && reset.vz == 0);
     CHECK(simulation.config().depth == .5f);
     capture("boat-captures/depth-reset.png", reset, false);
+}
+
+TEST_CASE("wake_visual", default_rendered_trail) {
+    Context context;
+    water::Config config;
+    water::Simulation simulation(config);
+    water::WaterRenderer renderer(config.grid);
+    water::BoatRenderer boat(config.grid);
+    water::SceneRenderer scene(config);
+    CHECK(scene.resize(840, 560));
+    water::upload_boat(simulation, {5, 6, 0, 0, 0, 0});
+    const float dt = float(water::stable_dt(config)) * .8f;
+    for (float time = 0; time < 3; time += dt)
+        simulation.step(dt, config.damping, {1, 0});
+    const auto state = water::download(simulation);
+    const auto pose = water::download_boat(simulation);
+    const Vector3 target{pose.x - 10, 0, pose.z - 6};
+    const Camera3D views[]{
+        {{13.3f, 21.76f, 17.49f}, {0, 0, 0}, {0, 1, 0}, 42, CAMERA_PERSPECTIVE},
+        {{target.x + 1.5f, 1.5f, target.z + 2}, target, {0, 1, 0}, 42, CAMERA_PERSPECTIVE}};
+    std::filesystem::create_directories("boat-captures");
+    for (int view = 0; view < 2; ++view) {
+        std::vector<Color> disturbed;
+        for (int flat = 0; flat < 2; ++flat) {
+            auto surface = state;
+            if (flat) {
+                for (auto* values : {&surface.eta, &surface.u, &surface.v})
+                    std::fill(values->begin(), values->end(), 0);
+            }
+            water::upload(simulation, surface);
+            renderer.update(simulation);
+            boat.update(simulation);
+            BeginDrawing();
+            scene.draw(views[view], renderer, boat, {}, 3, .7f);
+            const auto image = LoadImageFromScreen();
+            CHECK(image.data);
+            const auto colors = LoadImageColors(image);
+            CHECK(colors);
+            int changed = 0;
+            double difference = 0;
+            if (!flat) {
+                disturbed.assign(colors, colors + image.width * image.height);
+            } else {
+                for (int i = 0; i < image.width * image.height; ++i) {
+                    const auto a = disturbed[i], b = colors[i];
+                    const int delta = std::abs(int(a.r) - b.r) + std::abs(int(a.g) - b.g) +
+                                      std::abs(int(a.b) - b.b);
+                    difference += delta;
+                    changed += delta > 3;
+                }
+            }
+            UnloadImageColors(colors);
+            const bool saved = ExportImage(image, TextFormat("boat-captures/wake-%d-%d.png", view, flat));
+            UnloadImage(image);
+            EndDrawing();
+            CHECK(saved);
+            if (flat) {
+                std::cout << "WAKE RENDER view=" << view << " mean RGB=" << difference / (3 * 840 * 560)
+                          << " changed pixels=" << changed << '\n';
+                // The old attached pressure changed only 14 overview / 2466 close pixels.
+                CHECK(changed > (view == 0 ? 50 : 10000));
+            }
+        }
+    }
 }

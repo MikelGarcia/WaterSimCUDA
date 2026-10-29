@@ -1,6 +1,7 @@
 #include "validation.hpp"
 #include "test_support.hpp"
 #include <algorithm>
+#include <array>
 #include <iostream>
 #include <numeric>
 
@@ -31,7 +32,11 @@ double head(double x, double z, const water::BoatState& b, const water::Config& 
                .5 * bump((l + .35 * length) / (.75 * length)) * bump(transverse / (1.5 * width));
     };
     const double blend = ramp((vx * std::cos(yaw) + vz * std::sin(yaw) + .01) / .02);
-    return .002 * (speed * speed / (1.875 * 1.875)) * ramp((speed - .0001) / .0099) *
+    const double shedding = .01 * (speed * speed / (1.875 * 1.875)) * ramp((speed - .0001) / .0099) *
+        std::min(1.0, double(c.depth) / 3.0) * std::sin(b.wake_phase) *
+        (blend * bump((longitudinal + .8 * length) / (.5 * length)) +
+         (1-blend) * bump((longitudinal - .8 * length) / (.5 * length))) * bump(transverse / (1.5 * width));
+    return shedding + .002 * (speed * speed / (1.875 * 1.875)) * ramp((speed - .0001) / .0099) *
            std::min(1.0, double(c.depth) / 1.0) *
            (blend * pattern(longitudinal) + (1 - blend) * pattern(-longitudinal));
 }
@@ -92,7 +97,9 @@ TEST_CASE("wake", independent_pressure_gradient_and_continuity) {
             for (auto b : {water::BoatState{1.5f, 1.5f, .4f, .9f, .3f, 0},
                            {1.5f, 1.5f, 0, -.75f, 0, 0},
                            {.30f, .12f, 0, .4f, .3f, 0},
-                           {1.5f, 1.5f, 0, 0, .375f, 0}})
+                           {1.5f, 1.5f, 0, 0, .375f, 0},
+                           {1.5f, 1.5f, 0, -.75f, 0, 0, .7f},
+                           {1.5f, 1.5f, .4f, .9f, .3f, 0, 4.2f}})
                 CHECK(intensity(forced(s, c, b, .001f, damping)) > 1e-10);
     }
 }
@@ -128,6 +135,57 @@ TEST_CASE("wake", rest_coasting_speed_and_lateral_continuity) {
         for (int x = 0; x <= c.grid.nx; ++x)
             CHECK_NEAR(reverse.u[z * (c.grid.nx + 1) + x],
                        -fast.u[z * (c.grid.nx + 1) + c.grid.nx - x], 2e-6);
+    }
+}
+
+TEST_CASE("wake", moving_pressure_preserves_existing_waves_and_wake_history) {
+    const auto c = fixture();
+    const auto& g = c.grid;
+    for (float damping : {0.f, 2.5f}) {
+        water::Simulation background(c), wake(c), combined(c), instantaneous(c);
+        auto initial = water::download(background);
+        constexpr float pi = 3.14159265359f;
+        for (int z = 0; z < g.ny; ++z) {
+            for (int x = 0; x < g.nx; ++x)
+                initial.eta[z * g.nx + x] = .0004f + .0007f *
+                    std::cos(pi * (x + .5f) / g.nx) * std::cos(pi * (z + .5f) / g.ny);
+            for (int x = 1; x < g.nx; ++x)
+                initial.u[z * (g.nx + 1) + x] = .0003f * std::sin(pi * x / g.nx);
+        }
+        for (int z = 1; z < g.ny; ++z)
+            for (int x = 0; x < g.nx; ++x)
+                initial.v[z * g.nx + x] = -.0002f * std::sin(pi * z / g.ny);
+        water::upload(background, initial);
+        water::upload(combined, initial);
+        const water::BoatState boat{1.5f, 1.5f, .4f, .9f, .3f, 0};
+        water::upload_boat(wake, boat);
+        water::upload_boat(combined, boat);
+        constexpr float dt = .001f;
+        for (int step = 0; step < 200; ++step) {
+            instantaneous.reset();
+            water::upload_boat(instantaneous, water::download_boat(wake));
+            instantaneous.step(dt, damping, {1, .2f});
+            background.step(dt, damping);
+            wake.step(dt, damping, {1, .2f});
+            combined.step(dt, damping, {1, .2f});
+            const auto a = water::download(background);
+            const auto b = water::download(wake);
+            const auto sum = water::download(combined);
+            CHECK_NEAR(std::accumulate(sum.eta.begin(), sum.eta.end(), 0.0) / sum.eta.size(),
+                       .0004, 1e-9);
+            for (auto fields : {std::array<const std::vector<float>*, 3>{&a.eta, &b.eta, &sum.eta},
+                                {&a.u, &b.u, &sum.u}, {&a.v, &b.v, &sum.v}})
+                for (size_t i = 0; i < fields[0]->size(); ++i)
+                    CHECK_NEAR((*fields[2])[i], (*fields[0])[i] + (*fields[1])[i], 1e-8f);
+        }
+        const auto accumulated = water::download(wake);
+        const auto latest = water::download(instantaneous);
+        CHECK(intensity(accumulated) > 10 * intensity(latest));
+        const double mean = std::accumulate(accumulated.eta.begin(), accumulated.eta.end(), 0.0) /
+                            accumulated.eta.size();
+        CHECK(std::abs(mean) < 1e-9);
+        std::cout << "WAKE HISTORY damping=" << damping << " accumulated/latest velocity energy="
+                  << intensity(accumulated) / intensity(latest) << '\n';
     }
 }
 
@@ -199,4 +257,51 @@ TEST_CASE("wake", prolonged_boat_conserves_volume_and_stays_small) {
                 c.impact_strength = .001f;
                 boat_soak(c);
             }
+}
+
+TEST_CASE("wake", sustained_motion_radiates_resolved_trailing_waves) {
+    water::Config c;
+    water::Simulation s(c);
+    water::upload_boat(s, {5, 6, 0, 0, 0, 0});
+    const float dt = float(water::stable_dt(c)) * .8f;
+    for (float t = 0; t < 3; t += dt)
+        s.step(dt, c.damping, {1, 0});
+    const auto b = water::download_boat(s);
+    const auto state = water::download(s);
+    double trailing = 0;
+    for (int z = 0; z < c.grid.ny; ++z)
+        for (int x = 0; x < c.grid.nx; ++x) {
+            const float l = (x + .5f) * c.grid.lx / c.grid.nx - b.x;
+            if (l < -.6f)
+                trailing = std::max(trailing, double(std::abs(state.eta[z * c.grid.nx + x])));
+        }
+    std::cout << "trailing peak=" << trailing << '\n';
+    // One default click measured .568mm here; sustained propulsion must emit a resolved fraction.
+    CHECK(trailing > .0001);
+}
+
+TEST_CASE("wake", shedding_phase_tracks_travel_and_reset) {
+    auto c = fixture();
+    water::Simulation whole(c), split(c);
+    const water::BoatState start{1, 1.5f, 0, .75f, 0, 0};
+    water::upload_boat(whole, start);
+    water::upload_boat(split, start);
+    whole.step(.001f, c.damping, {1, 0});
+    split.step(.0005f, c.damping, {1, 0});
+    split.step(.0005f, c.damping, {1, 0});
+    const auto a = water::download_boat(whole), b = water::download_boat(split);
+    CHECK_NEAR(a.wake_phase, 6.28318530718f * (a.x - start.x) / water::boat_geometry.length, 2e-6);
+    CHECK_NEAR(a.wake_phase, b.wake_phase, 2e-5);
+    whole.set_depth(.5f);
+    CHECK(water::download_boat(whole).wake_phase == a.wake_phase);
+    water::upload_boat(whole, {a.x, a.z, a.yaw, 0, 0, 0, a.wake_phase});
+    whole.step(.001f, c.damping);
+    CHECK(water::download_boat(whole).wake_phase == a.wake_phase);
+    whole.reset();
+    CHECK(water::download_boat(whole).wake_phase == 0);
+    for (float h : water::download(whole).eta) CHECK(h == 0);
+    water::upload_boat(whole, {1, 1.5f, 0, .75f, 0, 0, 6.282f});
+    whole.step(.001f, c.damping);
+    const auto wrapped = water::download_boat(whole);
+    CHECK(wrapped.wake_phase >= 0 && wrapped.wake_phase < .02f);
 }

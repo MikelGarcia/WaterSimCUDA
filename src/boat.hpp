@@ -2,7 +2,7 @@
 
 namespace water {
 struct BoatControl { float throttle = 0, rudder = 0; };
-struct BoatState { float x, z, yaw, vx, vz, yaw_rate; };
+struct BoatState { float x, z, yaw, vx, vz, yaw_rate; float wake_phase = 0; };
 struct BoatGeometry { float length, beam, spawn_clearance; };
 inline constexpr BoatGeometry boat_geometry{0.60f, 0.227371384f, 0.0227371384f};
 struct BoatPoint { float x, z; };

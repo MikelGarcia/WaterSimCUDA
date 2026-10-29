@@ -35,6 +35,7 @@ void same_boat(const water::BoatState& a, const water::BoatState& b, float toler
     CHECK_NEAR(a.vx, b.vx, tolerance);
     CHECK_NEAR(a.vz, b.vz, tolerance);
     CHECK_NEAR(a.yaw_rate, b.yaw_rate, tolerance);
+    CHECK_NEAR(a.wake_phase, b.wake_phase, tolerance);
 }
 
 void same_water(const water::Snapshot& a, const water::Snapshot& b) {
