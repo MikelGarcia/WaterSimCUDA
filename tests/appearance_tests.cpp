@@ -1260,3 +1260,83 @@ TEST_CASE("wake_visual", default_rendered_trail) {
         }
     }
 }
+
+TEST_CASE("wake_visual", released_wave_remains_visible_outside_the_pressure_support) {
+    Context context;
+    water::Config config;
+    water::Simulation simulation(config);
+    water::WaterRenderer renderer(config.grid);
+    water::BoatRenderer boat(config.grid);
+    water::SceneRenderer scene(config);
+    CHECK(scene.resize(840, 560));
+    water::upload_boat(simulation, {5, 6, 0, 0, 0, 0});
+    const float dt = float(water::stable_dt(config)) * .8f;
+    for (float time = 0; time < 3; time += dt)
+        simulation.step(dt, config.damping, {1, 0});
+    const auto pose = water::download_boat(simulation);
+    water::upload_boat(simulation, {pose.x, pose.z, pose.yaw, 0, 0, 0});
+    const Vector3 target{pose.x - 10, 0, pose.z - 6};
+    const Camera3D views[]{
+        {{13.3f, 21.76f, 17.49f}, {0, 0, 0}, {0, 1, 0}, 42, CAMERA_PERSPECTIVE},
+        {{target.x + 4, 5, target.z + 6}, target, {0, 1, 0}, 42, CAMERA_PERSPECTIVE}};
+    std::filesystem::create_directories("boat-captures");
+    float elapsed = 0;
+    for (int frame = 0; frame < 5; ++frame) {
+        while (elapsed < frame * .2f) {
+            simulation.step(dt, config.damping);
+            elapsed += dt;
+        }
+        const auto state = water::download(simulation);
+        for (int view = 0; view < 2; ++view) {
+            std::vector<Color> disturbed;
+            int outside_changed = 0;
+            for (int flat = 0; flat < 2; ++flat) {
+                auto surface = state;
+                if (flat)
+                    for (auto* values : {&surface.eta, &surface.u, &surface.v})
+                        std::fill(values->begin(), values->end(), 0);
+                water::upload(simulation, surface);
+                renderer.update(simulation);
+                boat.update(simulation);
+                BeginDrawing();
+                scene.draw(views[view], renderer, boat, {}, 3, config.reflection);
+                const auto image = LoadImageFromScreen();
+                CHECK(image.data);
+                const auto colors = LoadImageColors(image);
+                CHECK(colors);
+                if (!flat) {
+                    disturbed.assign(colors, colors + image.width * image.height);
+                } else {
+                    for (int y = 0; y < image.height; ++y) {
+                        for (int x = 0; x < image.width; ++x) {
+                            const auto a = disturbed[y * image.width + x], b = colors[y * image.width + x];
+                            const int delta = std::abs(int(a.r) - b.r) + std::abs(int(a.g) - b.g) +
+                                              std::abs(int(a.b) - b.b);
+                            const Ray ray = GetScreenToWorldRay({float(x), float(y)}, views[view]);
+                            const float t = -ray.position.y / ray.direction.y;
+                            const float wx = ray.position.x + t * ray.direction.x;
+                            const float wz = ray.position.z + t * ray.direction.z;
+                            const double radius = std::hypot(wx - (target.x - .48f), wz - target.z);
+                            // This world-space exclusion contains the complete pressure footprint.
+                            if (t > 0 && radius > 1 && std::abs(wx) < 10 && std::abs(wz) < 6)
+                                outside_changed += delta > 3;
+                        }
+                    }
+                }
+                const bool saved = ExportImage(image, TextFormat("boat-captures/released-%d-%d-%d.png", frame, view, flat));
+                UnloadImageColors(colors);
+                UnloadImage(image);
+                EndDrawing();
+                CHECK(saved);
+            }
+            std::cout << "RELEASE RENDER time=" << elapsed << " view=" << view
+                      << " outside changed pixels=" << outside_changed << '\n';
+            // Baseline overview had only 59 / 0 / 0 pixels at .4 / .6 / .8 seconds.
+            if (view == 0 && frame == 2) CHECK(outside_changed >= 300);
+            if (view == 0 && frame >= 3) CHECK(outside_changed >= 100);
+            if (view == 1 && frame >= 2) CHECK(outside_changed >= 5000);
+        }
+        water::upload(simulation, state);
+    }
+    CHECK(glGetError() == GL_NO_ERROR);
+}

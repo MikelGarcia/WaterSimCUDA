@@ -235,7 +235,7 @@ __device__ float wake_head(float x, float z, const BoatState& b,
     // Bounded stern shedding radiates waves even for a subcritical translating hull.
     const float aft = wake_bump((l + .8f * length) / (.5f * length));
     const float fore = wake_bump((l - .8f * length) / (.5f * length));
-    const float shedding = .01f * (speed_squared / (1.875f * 1.875f)) *
+    const float shedding = .03f * (speed_squared / (1.875f * 1.875f)) *
         smooth_gain((sqrtf(speed_squared) - .0001f) / .0099f) * fminf(1, depth / 3.0f) *
         sinf(b.wake_phase) * (blend * aft + (1 - blend) * fore) * wake_bump(t / (1.5f * width));
     return amplitude * (blend * bow + (1 - blend) * stern) + shedding;

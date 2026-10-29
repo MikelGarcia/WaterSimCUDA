@@ -32,7 +32,7 @@ double head(double x, double z, const water::BoatState& b, const water::Config& 
                .5 * bump((l + .35 * length) / (.75 * length)) * bump(transverse / (1.5 * width));
     };
     const double blend = ramp((vx * std::cos(yaw) + vz * std::sin(yaw) + .01) / .02);
-    const double shedding = .01 * (speed * speed / (1.875 * 1.875)) * ramp((speed - .0001) / .0099) *
+    const double shedding = .03 * (speed * speed / (1.875 * 1.875)) * ramp((speed - .0001) / .0099) *
         std::min(1.0, double(c.depth) / 3.0) * std::sin(b.wake_phase) *
         (blend * bump((longitudinal + .8 * length) / (.5 * length)) +
          (1-blend) * bump((longitudinal - .8 * length) / (.5 * length))) * bump(transverse / (1.5 * width));
@@ -272,7 +272,7 @@ TEST_CASE("wake", sustained_motion_radiates_resolved_trailing_waves) {
     for (int z = 0; z < c.grid.ny; ++z)
         for (int x = 0; x < c.grid.nx; ++x) {
             const float l = (x + .5f) * c.grid.lx / c.grid.nx - b.x;
-            if (l < -.6f)
+            if (l < -.9f)
                 trailing = std::max(trailing, double(std::abs(state.eta[z * c.grid.nx + x])));
         }
     std::cout << "trailing peak=" << trailing << '\n';
@@ -304,4 +304,58 @@ TEST_CASE("wake", shedding_phase_tracks_travel_and_reset) {
     whole.step(.001f, c.damping);
     const auto wrapped = water::download_boat(whole);
     CHECK(wrapped.wake_phase >= 0 && wrapped.wake_phase < .02f);
+}
+
+TEST_CASE("wake", released_waves_travel_beyond_the_complete_forcing_footprint) {
+    water::Config c;
+    for (bool click : {false, true}) {
+        water::Simulation simulation(c);
+        water::upload_boat(simulation, {5, 6, 0, 0, 0, 0});
+        const float dt = float(water::stable_dt(c)) * .8f;
+        for (float t = 0; t < 3; t += dt)
+            simulation.step(dt, c.damping, {1, 0});
+        const auto boat = water::download_boat(simulation);
+        const double stern_x = boat.x - .8 * water::boat_geometry.length;
+        if (click) {
+            simulation.reset();
+            const water::Impact impact{float(stern_x), boat.z, c.impact_radius, c.impact_strength};
+            simulation.apply_impacts(&impact, 1);
+        }
+        water::upload_boat(simulation, {boat.x, boat.z, boat.yaw, 0, 0, 0});
+        float elapsed = 0;
+        double initial_radius = 0;
+        for (float target : {0.f, .2f, .4f, .6f, .8f}) {
+            while (elapsed < target) {
+                simulation.step(dt, c.damping);
+                elapsed += dt;
+            }
+            const auto state = water::download(simulation);
+            double far_peak = 0, mass = 0, weighted = 0, total = 0;
+            for (int z = 0; z < c.grid.ny; ++z) {
+                for (int x = 0; x < c.grid.nx; ++x) {
+                    const double radius = std::hypot((x + .5) * c.grid.lx / c.grid.nx - stern_x,
+                                                     (z + .5) * c.grid.lz / c.grid.ny - boat.z);
+                    const double height = state.eta[z * c.grid.nx + x];
+                    // One metre excludes both pressure lobes, including their transverse support.
+                    if (radius > 1)
+                        far_peak = std::max(far_peak, std::abs(height));
+                    weighted += radius * radius * height * height;
+                    total += height * height;
+                    mass += height;
+                }
+            }
+            const double radius = std::sqrt(weighted / total);
+            CHECK(std::abs(mass / state.eta.size()) < 1e-9);
+            if (target == 0) {
+                initial_radius = radius;
+            } else {
+                CHECK(far_peak > .0001);
+                const double travel = std::sqrt(c.gravity * c.depth) * elapsed;
+                CHECK(radius - initial_radius > .65 * travel);
+                CHECK(radius - initial_radius < 1.2 * travel);
+            }
+            std::cout << "RELEASE click=" << click << " time=" << elapsed
+                      << " outside peak=" << far_peak << " rms radius=" << radius << '\n';
+        }
+    }
 }

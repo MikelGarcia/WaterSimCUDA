@@ -317,3 +317,105 @@ TEST_CASE("numerics", live_depth_preserves_fields_and_updates_validation_and_cfl
             CHECK(std::all_of(values->begin(), values->end(), [](float v) { return v == 0; }));
     }
 }
+
+TEST_CASE("numerics", nonzero_fields_follow_independent_linear_swe) {
+    water::Config c;
+    c.grid = {80, 64, 4, 3};
+    c.impact_radius = .15f;
+    water::Simulation simulation(c);
+    auto expected = water::download(simulation);
+    const auto& g = c.grid;
+    const double dx = double(g.lx) / g.nx, dz = double(g.lz) / g.ny;
+    for (int z = 0; z < g.ny; ++z)
+        for (int x = 0; x < g.nx; ++x)
+            expected.eta[z * g.nx + x] = float(.001 * std::cos(pi * (x + .5) / g.nx) *
+                                                    std::cos(pi * (z + .5) / g.ny));
+    for (int z = 0; z < g.ny; ++z)
+        for (int x = 1; x < g.nx; ++x)
+            expected.u[z * (g.nx + 1) + x] = float(.0003 * std::sin(pi * x / g.nx));
+    for (int z = 1; z < g.ny; ++z)
+        for (int x = 0; x < g.nx; ++x)
+            expected.v[z * g.nx + x] = float(-.0002 * std::sin(pi * z / g.ny));
+    water::upload(simulation, expected);
+    constexpr float dt = .001f;
+    double max_error = 0;
+    for (int step = 0; step < 200; ++step) {
+        auto next = expected;
+        for (int z = 0; z < g.ny; ++z) {
+            for (int x = 1; x < g.nx; ++x) {
+                const int i = z * (g.nx + 1) + x;
+                const double gradient = (expected.eta[z * g.nx + x] -
+                                         double(expected.eta[z * g.nx + x - 1])) / dx;
+                next.u[i] = float((expected.u[i] - c.gravity * double(dt) * gradient) /
+                                  (1 + c.damping * double(dt)));
+            }
+        }
+        for (int z = 1; z < g.ny; ++z) {
+            for (int x = 0; x < g.nx; ++x) {
+                const int i = z * g.nx + x;
+                const double gradient = (expected.eta[i] - double(expected.eta[i - g.nx])) / dz;
+                next.v[i] = float((expected.v[i] - c.gravity * double(dt) * gradient) /
+                                  (1 + c.damping * double(dt)));
+            }
+        }
+        for (int z = 0; z < g.ny; ++z) {
+            for (int x = 0; x < g.nx; ++x) {
+                const double divergence =
+                    (next.u[z * (g.nx + 1) + x + 1] - double(next.u[z * (g.nx + 1) + x])) / dx +
+                    (next.v[(z + 1) * g.nx + x] - double(next.v[z * g.nx + x])) / dz;
+                next.eta[z * g.nx + x] = float(expected.eta[z * g.nx + x] - c.depth * double(dt) * divergence);
+            }
+        }
+        expected = next;
+        simulation.step(dt, c.damping);
+        const auto actual = water::download(simulation);
+        for (size_t i = 0; i < actual.eta.size(); ++i)
+            max_error = std::max(max_error, std::abs(double(actual.eta[i]) - expected.eta[i]));
+        for (size_t i = 0; i < actual.u.size(); ++i)
+            max_error = std::max(max_error, std::abs(double(actual.u[i]) - expected.u[i]));
+        for (size_t i = 0; i < actual.v.size(); ++i)
+            max_error = std::max(max_error, std::abs(double(actual.v[i]) - expected.v[i]));
+    }
+    std::cout << "CPU linear SWE maximum absolute error=" << max_error << '\n';
+    CHECK(max_error < 1e-8);
+}
+
+TEST_CASE("numerics", released_one_dimensional_wave_has_analytic_speed) {
+    water::Config c;
+    c.grid = {512, 32, 20, 12};
+    c.impact_radius = .8f;
+    water::Simulation simulation(c);
+    auto initial = water::download(simulation);
+    const double speed = std::sqrt(c.gravity * c.depth);
+    const auto pulse = [](double x) { return .001 * std::exp(-std::pow((x - 7) / .6, 2)); };
+    for (int z = 0; z < c.grid.ny; ++z) {
+        for (int x = 0; x < c.grid.nx; ++x)
+            initial.eta[z * c.grid.nx + x] = float(pulse((x + .5) * c.grid.lx / c.grid.nx));
+        for (int x = 1; x < c.grid.nx; ++x)
+            initial.u[z * (c.grid.nx + 1) + x] = float(speed / c.depth * pulse(x * c.grid.lx / c.grid.nx));
+    }
+    water::upload(simulation, initial);
+    const float dt = float(water::stable_dt(c)) * .8f;
+    float elapsed = 0;
+    for (float target : {.2f, .4f, .6f}) {
+        while (elapsed < target) {
+            simulation.step(dt, 0);
+            elapsed += dt;
+        }
+        const auto actual = water::download(simulation);
+        double squared_error = 0, norm = 0;
+        int maximum = 0;
+        for (int x = 0; x < c.grid.nx; ++x) {
+            const double expected = pulse((x + .5) * c.grid.lx / c.grid.nx - speed * elapsed);
+            squared_error += std::pow(actual.eta[x] - expected, 2);
+            norm += expected * expected;
+            if (actual.eta[x] > actual.eta[maximum]) maximum = x;
+        }
+        const double peak_position = (maximum + .5) * c.grid.lx / c.grid.nx;
+        const double error = std::sqrt(squared_error / norm);
+        std::cout << "ANALYTIC time=" << elapsed << " peak position=" << peak_position
+                  << " expected=" << 7 + speed * elapsed << " relative L2=" << error << '\n';
+        CHECK(std::abs(peak_position - (7 + speed * elapsed)) < 2 * c.grid.lx / c.grid.nx);
+        CHECK(error < .03);
+    }
+}
