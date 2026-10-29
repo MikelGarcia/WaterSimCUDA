@@ -47,9 +47,9 @@ TEST_CASE("boat_asset", packaged_boat_loads_and_renders) {
         CHECK(IsTextureValid(model.materials[model.meshMaterial[i]].maps[MATERIAL_MAP_DIFFUSE].texture));
     }
     std::filesystem::create_directories("boat-asset-captures");
-    const Camera3D views[] = {{{.32f,.23f,.32f},{0,0,0},{0,1,0},45,CAMERA_PERSPECTIVE},
-                             {{0,.48f,0},{0,0,0},{1,0,0},45,CAMERA_PERSPECTIVE},
-                             {{.08f,.07f,-.38f},{0,0,0},{0,1,0},45,CAMERA_PERSPECTIVE}};
+    const Camera3D views[] = {{{.64f,.46f,.64f},{0,0,0},{0,1,0},45,CAMERA_PERSPECTIVE},
+                             {{0,.96f,0},{0,0,0},{1,0,0},45,CAMERA_PERSPECTIVE},
+                             {{.16f,.14f,-.76f},{0,0,0},{0,1,0},45,CAMERA_PERSPECTIVE}};
     RenderTexture2D target = LoadRenderTexture(900, 650);
     for (int i = 0; i < 3; ++i) {
         BeginTextureMode(target);
@@ -138,13 +138,14 @@ TEST_CASE("boat_asset", measured_hull_and_baked_hierarchy) {
                 }
             }
         }
+        CHECK_NEAR(hi[0]-lo[0], .6f, .0003f);
         CHECK_NEAR(hi[0]-lo[0], water::boat_geometry.length, .0003f);
         CHECK_NEAR(hi[2]-lo[2], water::boat_geometry.beam, .00001f);
         CHECK_NEAR((hi[2]-lo[2])/(hi[0]-lo[0]), 3.199835777282715/8.443901062011719, .00037896);
         CHECK_NEAR((hi[0]+lo[0])/2, 0, .001f);
         CHECK_NEAR((hi[2]+lo[2])/2, 0, .001f);
-        CHECK_NEAR(lo[1], (-1.4154112339019775+.5)*.03552860198109977, .001f);
-        CHECK_NEAR(hi[1], (.3108023405075073+.5)*.03552860198109977, .001f);
+        CHECK_NEAR(lo[1], (-1.4154112339019775+.5)*.07105720396219954, .001f);
+        CHECK_NEAR(hi[1], (.3108023405075073+.5)*.07105720396219954, .001f);
         CHECK(water::boat_waterline_count >= 3 && water::boat_waterline_count <= 16);
         for (int k = 0; k < water::boat_waterline_count; ++k) CHECK(landmark_distance[k] < .001f);
         CHECK_NEAR(water::boat_geometry.spawn_clearance,

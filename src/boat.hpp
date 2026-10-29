@@ -4,26 +4,26 @@ namespace water {
 struct BoatControl { float throttle = 0, rudder = 0; };
 struct BoatState { float x, z, yaw, vx, vz, yaw_rate; };
 struct BoatGeometry { float length, beam, spawn_clearance; };
-inline constexpr BoatGeometry boat_geometry{0.30f, 0.113685692f, 0.0113685692f};
+inline constexpr BoatGeometry boat_geometry{0.60f, 0.227371384f, 0.0227371384f};
 struct BoatPoint { float x, z; };
 // Evaluated hull intersection at source Z=-0.5, simplified inward to 16 vertices.
 inline constexpr BoatPoint boat_waterline[16]{
-    {-0.147245352f, -0.003249567f},
-    {-0.144698931f, -0.032702610f},
-    {-0.139527242f, -0.049925601f},
-    {-0.088544768f, -0.053872564f},
-    {0.035774631f, -0.049859911f},
-    {0.096570376f, -0.035659779f},
-    {0.114798997f, -0.024418568f},
-    {0.129889143f, -0.002314593f},
-    {0.129889143f, 0.002314594f},
-    {0.114798989f, 0.024418572f},
-    {0.096570372f, 0.035659775f},
-    {0.080346428f, 0.041421209f},
-    {0.035774631f, 0.049859911f},
-    {-0.088544751f, 0.053872568f},
-    {-0.139527225f, 0.049925605f},
-    {-0.144698948f, 0.032702612f},
+    {-0.294490704f, -0.006499134f},
+    {-0.289397862f, -0.065405220f},
+    {-0.279054484f, -0.099851202f},
+    {-0.177089536f, -0.107745128f},
+    {0.071549262f, -0.099719822f},
+    {0.193140752f, -0.071319558f},
+    {0.229597994f, -0.048837136f},
+    {0.259778286f, -0.004629186f},
+    {0.259778286f, 0.004629188f},
+    {0.229597978f, 0.048837144f},
+    {0.193140744f, 0.071319550f},
+    {0.160692856f, 0.082842418f},
+    {0.071549262f, 0.099719822f},
+    {-0.177089502f, 0.107745136f},
+    {-0.279054450f, 0.099851210f},
+    {-0.289397896f, 0.065405224f},
 };
 inline constexpr int boat_waterline_count = 16;
 } // namespace water

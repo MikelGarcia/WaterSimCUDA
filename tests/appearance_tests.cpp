@@ -1129,10 +1129,10 @@ TEST_CASE("appearance", driven_real_boat_contacts_and_escapes_every_wall_and_cor
     CHECK(scene.resize(840, 560));
     std::filesystem::create_directories("boat-captures");
     const water::BoatState starts[]{
-        {3.65f,1.5f,0,0,0,0}, {.35f,1.5f,3.14159265f,0,0,0},
-        {2,2.65f,1.57079633f,0,0,0}, {2,.35f,-1.57079633f,0,0,0},
-        {3.65f,2.65f,.78539816f,0,0,0}, {.35f,2.65f,2.35619449f,0,0,0},
-        {.35f,.35f,-2.35619449f,0,0,0}, {3.65f,.35f,-.78539816f,0,0,0}};
+        {3.5f,1.5f,0,0,0,0}, {.5f,1.5f,3.14159265f,0,0,0},
+        {2,2.5f,1.57079633f,0,0,0}, {2,.5f,-1.57079633f,0,0,0},
+        {3.5f,2.5f,.78539816f,0,0,0}, {.5f,2.5f,2.35619449f,0,0,0},
+        {.5f,.5f,-2.35619449f,0,0,0}, {3.5f,.5f,-.78539816f,0,0,0}};
     auto capture = [&](const char* name, const water::BoatState& state, bool overview) {
         const Vector3 target{state.x - 2, 0, state.z - 1.5f};
         const Camera3D close{{target.x+.42f,.40f,target.z+.52f},target,{0,1,0},42,CAMERA_PERSPECTIVE};

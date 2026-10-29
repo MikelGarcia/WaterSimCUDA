@@ -26,7 +26,7 @@ void advance(water::Simulation& s, int count, water::BoatControl control = {},
 void inside(const water::BoatState& b, const water::Grid& g) {
     CHECK(std::isfinite(b.x) && std::isfinite(b.z) && std::isfinite(b.yaw));
     CHECK(std::isfinite(b.yaw_rate));
-    CHECK(speed(b) <= 1.50001f);
+    CHECK(speed(b) <= 1.87501f);
     for (int i : {-1, 1})
         for (int j : {-1, 1}) {
             const double x = b.x + i * 0.5 * water::boat_geometry.length * std::cos(double(b.yaw)) -
@@ -38,23 +38,27 @@ void inside(const water::BoatState& b, const water::Grid& g) {
         }
 }
 } // namespace
+TEST_CASE("boat", requested_hull_dimensions) {
+    CHECK_NEAR(water::boat_geometry.length, .6f, 1e-7f);
+    CHECK_NEAR(water::boat_geometry.beam, .227371384f, 1e-7f);
+}
 TEST_CASE("boat", propulsion_braking_and_coasting) {
     water::Simulation s(fixture());
-    advance(s, 600, {1, 0});
+    advance(s, 1200, {1, 0});
     auto b = water::download_boat(s);
-    CHECK(longitudinal(b) > 1.4f);
-    CHECK(speed(b) <= 1.50001f);
+    CHECK_NEAR(longitudinal(b), 1.875f, 1e-5f);
+    CHECK(speed(b) <= 1.87501f);
     water::upload_boat(s, {20, 15, 0, 1, 0, 0});
     s.step(1.0f / 120, 0, {-1, 0});
     CHECK(longitudinal(water::download_boat(s)) >= 0);
     advance(s, 200, {-1, 0});
     b = water::download_boat(s);
     CHECK(longitudinal(b) < 0);
-    CHECK(longitudinal(b) >= -0.75001f);
+    CHECK(longitudinal(b) >= -0.93751f);
     advance(s, 400, {-1, 0});
     b = water::download_boat(s);
-    CHECK(longitudinal(b) < -0.7f);
-    CHECK(speed(b) <= 0.75001f);
+    CHECK_NEAR(longitudinal(b), -.9375f, 1e-5f);
+    CHECK(speed(b) <= 0.93751f);
     s.step(1.0f / 120, 0, {1, 0});
     CHECK(longitudinal(water::download_boat(s)) < 0);
     advance(s, 200, {1, 0});
@@ -87,7 +91,7 @@ TEST_CASE("boat", rudder_rest_reverse_and_high_speed) {
     }
     float rates[2];
     int n = 0;
-    for (float v : {.75f, 1.5f}) {
+    for (float v : {.9375f, 1.875f}) {
         water::upload_boat(s, {20, 15, 0, v, 0, 0});
         for (int i = 0; i < 120; ++i) {
             const auto current = water::download_boat(s);
@@ -122,10 +126,10 @@ TEST_CASE("boat", walls_corners_and_contact_energy) {
     auto c = fixture();
     water::Simulation s(c);
     const std::array<water::BoatState, 9> states{
-        {{.17f, 15, pi, -1.5f, 0, 0}, {39.83f, 15, 0, 1.5f, 0, 0}, {20, .17f, -pi / 2, 0, -1.5f, 0},
-            {20, 29.83f, pi / 2, 0, 1.5f, 0}, {39.85f, 29.85f, pi / 4, 1.06f, 1.06f, .5f},
-            {20, .057f, 0, .7f, -.1f, -1.5f}, {.057f, 15, pi / 2, -.1f, .7f, 1.5f},
-            {39.943f, 15, pi / 2, .1f, .7f, 1.5f}, {20, 29.943f, 0, .7f, .1f, 1.5f}}};
+        {{.34f, 15, pi, -1.5f, 0, 0}, {39.66f, 15, 0, 1.5f, 0, 0}, {20, .34f, -pi / 2, 0, -1.5f, 0},
+            {20, 29.66f, pi / 2, 0, 1.5f, 0}, {39.7f, 29.7f, pi / 4, 1.06f, 1.06f, .5f},
+            {20, .114f, 0, .7f, -.1f, -1.5f}, {.114f, 15, pi / 2, -.1f, .7f, 1.5f},
+            {39.886f, 15, pi / 2, .1f, .7f, 1.5f}, {20, 29.886f, 0, .7f, .1f, 1.5f}}};
     for (auto state : states) {
         water::upload_boat(s, state);
         float old = speed(state);
@@ -147,17 +151,17 @@ TEST_CASE("boat", walls_corners_and_contact_energy) {
 TEST_CASE("boat", contact_escape_and_blocked_yaw_recovery) {
     auto c = fixture();
     water::Simulation s(c);
-    water::upload_boat(s, {39.85f, 15, 0, 0, 0, 0});
+    water::upload_boat(s, {39.7f, 15, 0, 0, 0, 0});
     advance(s, 120, {-1, 0});
     auto b = water::download_boat(s);
     CHECK(b.x < 39.7f);
     inside(b, c.grid);
-    water::upload_boat(s, {.15f, 15, 0, 0, 0, 0});
+    water::upload_boat(s, {.30f, 15, 0, 0, 0, 0});
     advance(s, 120, {1, 0});
     b = water::download_boat(s);
     CHECK(b.x > .3f);
     inside(b, c.grid);
-    water::upload_boat(s, {20, .057f, 0, .5f, 0, -1});
+    water::upload_boat(s, {20, .114f, 0, .5f, 0, -1});
     advance(s, 60, {1, -1});
     inside(water::download_boat(s), c.grid);
     advance(s, 600, {1, 1});
@@ -170,7 +174,7 @@ TEST_CASE("boat", contact_escape_and_blocked_yaw_recovery) {
     b = water::download_boat(s);
     CHECK(b.x > 20.5f);
     inside(b, c.grid);
-    water::upload_boat(s, {39.85f, 15, 0, 0, 0, 0});
+    water::upload_boat(s, {39.7f, 15, 0, 0, 0, 0});
     for (int i = 0; i < 300; ++i) {
         s.step(1.0f / 120, 0, {1, 1});
         inside(water::download_boat(s), c.grid);
@@ -179,7 +183,7 @@ TEST_CASE("boat", contact_escape_and_blocked_yaw_recovery) {
 TEST_CASE("boat", translating_impact_after_angular_contact_loses_energy) {
     auto c = fixture();
     water::Simulation s(c);
-    water::upload_boat(s, {20, .058f, 0, .7f, -.18f, -2});
+    water::upload_boat(s, {20, water::boat_geometry.beam / 2 + .001f, 0, .7f, -.18f, -2});
     s.step(1.0f / 120, 0);
     const auto b = water::download_boat(s);
     inside(b, c.grid);
@@ -188,11 +192,11 @@ TEST_CASE("boat", translating_impact_after_angular_contact_loses_energy) {
 TEST_CASE("boat", fit_reset_and_invalid_inputs) {
     for (bool transpose : {false, true}) {
         auto c = fixture();
-        c.grid.lx = transpose ? .13f : .25f;
-        c.grid.lz = transpose ? .25f : .13f;
+        c.grid.lx = transpose ? .26f : .50f;
+        c.grid.lz = transpose ? .50f : .26f;
         c.grid.nx = 64;
         c.grid.ny = 64;
-        c.impact_radius = .02f;
+        c.impact_radius = .04f;
         bool caught = false;
         try {
             water::Simulation s(c);
@@ -202,8 +206,8 @@ TEST_CASE("boat", fit_reset_and_invalid_inputs) {
                      text.find("required") != std::string::npos;
         }
         CHECK(caught);
-        c.grid.lx = transpose ? .14f : .34f;
-        c.grid.lz = transpose ? .34f : .14f;
+        c.grid.lx = transpose ? .28f : .68f;
+        c.grid.lz = transpose ? .68f : .28f;
         water::Simulation s(c);
         auto b = water::download_boat(s);
         CHECK_NEAR(b.yaw, transpose ? pi / 2 : 0, 1e-7f);

@@ -81,6 +81,6 @@ Runtime adaptation: 69 Chris Craft Boat by ryanhaldy, CC BY 3.0.
 Source: http://www.blendswap.com/blends/view/54825
 License: https://creativecommons.org/licenses/by/3.0/
 Converted offline to GLB with evaluated modifiers and baked transforms; uniformly
-scaled to 0.30 m hull length and aligned +X forward, +Y up at the chosen waterline.
+scaled to 0.60 m hull length and aligned +X forward, +Y up at the chosen waterline.
 Legacy shader materials converted to constant glTF materials; reference photos
 and environment image omitted. Original ChrisCraft.blend remains unchanged.

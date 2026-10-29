@@ -1,6 +1,6 @@
 # WaterSimCUDA
 
-A Windows C++17/CUDA shallow-water basin with a GPU driven 0.30 m RC boat, rendered with raylib and OpenGL 3.3. CUDA owns the water state and writes the shared mesh buffers. Falling drops trigger volume-balanced ripples; the simulation uses fixed stable substeps and a bounded catch-up clock.
+A Windows C++17/CUDA shallow-water basin with a GPU driven 0.60 m RC boat, rendered with raylib and OpenGL 3.3. Forward speed is capped at 1.875 m/s and reverse at 0.9375 m/s. CUDA owns the water state and writes the shared mesh buffers. Falling drops trigger volume-balanced ripples; the simulation uses fixed stable substeps and a bounded catch-up clock.
 
 Build with a supported MSVC/CUDA pair, CMake, an NVIDIA GPU, and a desktop session. See [the checked build environment](docs/build-environment.md) for exact versions, environment setup, and the pinned raylib offline override.
 

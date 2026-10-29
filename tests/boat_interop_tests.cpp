@@ -243,7 +243,7 @@ TEST_CASE("boat_interop", recessed_cockpit_floor_remains_visible_at_all_water_mi
     const Camera3D camera{{0,.63f,0},{0,0,0},{0,0,-1},38,CAMERA_PERSPECTIVE};
     for (auto pose : {water::BoatState{.5f,.5f,0,0,0,0},water::BoatState{.53f,.48f,1.570796327f,0,0,0},water::BoatState{.47f,.52f,-.65f,0,0,0}}) {
         water::upload_boat(simulation,pose); boat.update(simulation);
-        const Vector3 point=world_point({-.025f,0,.027f},pose);
+        const Vector3 point=world_point({-.05f,0,.054f},pose);
         const auto projected=GetWorldToScreenEx(point,camera,640,480);
         std::array<unsigned char,4> initial{};
         for (float mix : {0.f,.7f,1.f}) {

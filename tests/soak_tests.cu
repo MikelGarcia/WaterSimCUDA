@@ -48,7 +48,7 @@ void sustained_rain(int nx, int ny, float depth = 3, float rate = 120, float dam
                                       water::boat_geometry.beam * std::abs(std::cos(boat.yaw)));
         CHECK(boat.x >= extent_x && boat.x <= config.grid.lx - extent_x);
         CHECK(boat.z >= extent_z && boat.z <= config.grid.lz - extent_z);
-        CHECK(std::hypot(boat.vx, boat.vz) <= 1.50001f);
+        CHECK(std::hypot(boat.vx, boat.vz) <= 1.87501f);
         distance_from_spawn = std::max(distance_from_spawn, std::hypot(boat.x - 10, boat.z - 6));
         reversed |= boat.vx * std::cos(boat.yaw) + boat.vz * std::sin(boat.yaw) < -.1f;
         const auto state = water::download(simulation);

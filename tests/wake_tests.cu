@@ -31,7 +31,7 @@ double head(double x, double z, const water::BoatState& b, const water::Config& 
                .5 * bump((l + .35 * length) / (.75 * length)) * bump(transverse / (1.5 * width));
     };
     const double blend = ramp((vx * std::cos(yaw) + vz * std::sin(yaw) + .01) / .02);
-    return .002 * (speed * speed / 2.25) * ramp((speed - .0001) / .0099) *
+    return .002 * (speed * speed / (1.875 * 1.875)) * ramp((speed - .0001) / .0099) *
            std::min(1.0, double(c.depth) / 1.0) *
            (blend * pattern(longitudinal) + (1 - blend) * pattern(-longitudinal));
 }
@@ -91,8 +91,8 @@ TEST_CASE("wake", independent_pressure_gradient_and_continuity) {
         for (float damping : {0.f, 2.5f})
             for (auto b : {water::BoatState{1.5f, 1.5f, .4f, .9f, .3f, 0},
                            {1.5f, 1.5f, 0, -.75f, 0, 0},
-                           {.15f, .06f, 0, .4f, .3f, 0},
-                           {1.5f, 1.5f, 0, 0, .3f, 0}})
+                           {.30f, .12f, 0, .4f, .3f, 0},
+                           {1.5f, 1.5f, 0, 0, .375f, 0}})
                 CHECK(intensity(forced(s, c, b, .001f, damping)) > 1e-10);
     }
 }
@@ -150,7 +150,7 @@ void boat_soak(water::Config c) {
                                     water::boat_geometry.beam * std::abs(std::cos(yaw)));
             const float x = (leg & 1) ? ex + .001f : c.grid.lx - ex - .001f;
             const float z = (leg & 2) ? ez + .001f : c.grid.lz - ez - .001f;
-            water::upload_boat(s, {x, z, yaw, 1.5f * std::cos(yaw), 1.5f * std::sin(yaw), 0});
+            water::upload_boat(s, {x, z, yaw, 1.875f * std::cos(yaw), 1.875f * std::sin(yaw), 0});
         }
         for (int tick = 0; tick < 120; ++tick) {
             water::BoatControl control{1, 0};

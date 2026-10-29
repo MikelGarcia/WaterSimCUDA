@@ -42,7 +42,7 @@ __device__ float driven_speed(float speed, float throttle, float dt) {
     const float decay = expf(-drag * dt);
     const float next = speed * decay + acceleration * (-expm1f(-drag * dt)) / drag;
     // A reverse propulsion cap must not delete a pre-existing rebound impulse.
-    if (throttle < 0) return fmaxf(next, fminf(speed, -0.75f));
+    if (throttle < 0) return fmaxf(next, fminf(speed, -0.9375f));
     return next;
 }
 
@@ -64,9 +64,9 @@ __global__ void update_boat(BoatState* boat, BoatControl control, float dt, floa
     const int count = min(256, max(1, static_cast<int>(ceilf(consumed / safe_dt))));
     const float h = consumed / count;
     const float initial_speed = hypotf(b.vx, b.vz);
-    if (initial_speed > 1.5f) {
-        b.vx *= 1.5f / initial_speed;
-        b.vz *= 1.5f / initial_speed;
+    if (initial_speed > 1.875f) {
+        b.vx *= 1.875f / initial_speed;
+        b.vz *= 1.875f / initial_speed;
     }
     b.yaw_rate = fminf(2.0f, fmaxf(-2.0f, b.yaw_rate));
     int previous_contact = 0;
@@ -80,12 +80,12 @@ __global__ void update_boat(BoatState* boat, BoatControl control, float dt, floa
         float vx = forward * c - sideways * s;
         float vz = forward * s + sideways * c;
         const float magnitude = hypotf(vx, vz);
-        if (magnitude > 1.5f) {
-            vx *= 1.5f / magnitude;
-            vz *= 1.5f / magnitude;
+        if (magnitude > 1.875f) {
+            vx *= 1.875f / magnitude;
+            vz *= 1.875f / magnitude;
         }
         const float mid_speed = 0.5f * (longitudinal + forward);
-        const float ratio = mid_speed / 1.5f;
+        const float ratio = mid_speed / 1.875f;
         const float target = control.rudder * 2.5f * mid_speed / (1 + 3 * ratio * ratio);
         float rate = target + (b.yaw_rate - target) * expf(-8 * h);
         rate = fminf(2.0f, fmaxf(-2.0f, rate));
@@ -227,7 +227,7 @@ __device__ float wake_head(float x, float z, const BoatState& b,
     const float stern = wake_bump((-l - .25f * length) / (.5f * length)) * wake_bump(t / width) -
         .5f * wake_bump((-l + .35f * length) / (.75f * length)) * wake_bump(t / (1.5f * width));
     const float blend = smooth_gain((b.vx * c + b.vz * s + .01f) / .02f);
-    const float amplitude = .002f * (speed_squared / 2.25f) *
+    const float amplitude = .002f * (speed_squared / (1.875f * 1.875f)) *
         smooth_gain((sqrtf(speed_squared) - .0001f) / .0099f) * fminf(1, depth / 1.0f);
     return amplitude * (blend * bow + (1 - blend) * stern);
 }
