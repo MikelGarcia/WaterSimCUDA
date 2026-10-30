@@ -184,6 +184,7 @@ void boat_soak(water::Config c) {
     const int subdivisions = water::substeps_per_quantum(c);
     const float dt = float((1.0 / 120) / subdivisions);
     double maximum_mean = 0;
+    double eta_variance_sum = 0, maximum_eta_rms = 0;
     float peak = 0;
     for (int second = 1; second <= 120; ++second) {
         // Each leg starts with the real moving boat near a different wall/corner.
@@ -224,6 +225,12 @@ void boat_soak(water::Config c) {
             std::accumulate(state.eta.begin(), state.eta.end(), 0.0) / state.eta.size();
         maximum_mean = std::max(maximum_mean, std::abs(mean));
         CHECK(std::abs(mean) <= 1e-6 * std::max(c.depth, .25f));
+        double variance = 0;
+        for (float eta : state.eta)
+            variance += (double(eta) - mean) * (double(eta) - mean);
+        variance /= state.eta.size();
+        eta_variance_sum += variance;
+        maximum_eta_rms = std::max(maximum_eta_rms, std::sqrt(variance));
         for (float eta : state.eta)
             peak = std::max(peak, std::abs(eta));
         if (peak >= .02f * c.depth)
@@ -234,7 +241,8 @@ void boat_soak(water::Config c) {
     }
     std::cout << "BOAT SOAK " << c.grid.nx << 'x' << c.grid.ny << " H = " << c.depth
               << " damping = " << c.damping << " seconds = 120 max_mean = " << maximum_mean
-              << " peak = " << peak << '\n';
+              << " peak = " << peak << " eta_rms = " << std::sqrt(eta_variance_sum / 120)
+              << " max_eta_rms = " << maximum_eta_rms << '\n';
 }
 } // namespace
 TEST_CASE("wake", prolonged_boat_conserves_volume_and_stays_small) {
