@@ -129,10 +129,7 @@ __global__ void update_boat(BoatState* boat, BoatControl control, float dt, floa
         if (contact & ~previous_contact) rate *= 0.20f;
         previous_contact = contact;
         previous_translation_contact = translation_contact;
-        const float phase = fmodf(b.wake_phase + 6.28318530718f *
-                                  hypotf(x - b.x, z - b.z) / boat_geometry.length,
-                                  6.28318530718f);
-        b = {x, z, yaw, vx, vz, rate, phase};
+        b = {x, z, yaw, vx, vz, rate};
     }
     *boat = b;
 }
@@ -206,40 +203,22 @@ __global__ void apply_impact_batch(float* eta, ImpactBatch batch, const double2*
     eta[i] = height;
 }
 
-__device__ float wake_bump(float q) {
-    if (fabsf(q) >= 1) return 0;
-    const float a = 1 - q * q;
-    return a * a * a;
-}
-
-__device__ float smooth_gain(float x) {
-    x = fminf(1, fmaxf(0, x));
-    return x * x * (3 - 2 * x);
-}
-
-__device__ float wake_head(float x, float z, const BoatState& b,
+__device__ float hull_head(float x, float z, const BoatState& b,
                            float dx, float dz, float depth) {
-    const float speed_squared = b.vx * b.vx + b.vz * b.vz;
-    if (speed_squared <= 1e-8f) return 0;
     const float c = cosf(b.yaw), s = sinf(b.yaw);
-    const float l = (x - b.x) * c + (z - b.z) * s;
-    const float t = -(x - b.x) * s + (z - b.z) * c;
-    const float length = fmaxf(boat_geometry.length, 4 * fmaxf(dx, dz));
-    const float width = fmaxf(.07f, 2 * fmaxf(dx, dz));
-    const float blend = smooth_gain((b.vx * c + b.vz * s + .01f) / .02f);
-    float pressure = 0;
-    for (int direction = -1; direction <= 1; direction += 2) {
-        const float aft = .5f * boat_geometry.length - direction * l;
-        const float envelope = smooth_gain(aft / (.2f * length)) *
-            (1 - smooth_gain((aft - 1.5f * length) / (.5f * length)));
-        const float offset = .7f * aft;
-        const float arms = wake_bump((t - offset) / width) + wake_bump((t + offset) / width);
-        pressure += (direction == 1 ? blend : 1 - blend) * envelope * arms;
-    }
-    // Compact bow-rooted pressure arms; travel modulation also releases freely evolving waves.
-    return .012f * (speed_squared / (1.875f * 1.875f)) *
-        smooth_gain((sqrtf(speed_squared) - .0001f) / .0099f) * fminf(1, depth / 3.0f) *
-        sqrtf(fminf(1, depth / 3.0f)) * (1 + .3f * sinf(b.wake_phase)) * pressure;
+    const float longitudinal = (x - b.x) * c + (z - b.z) * s;
+    const float transverse = -(x - b.x) * s + (z - b.z) * c;
+    const float cell = fmaxf(dx, dz);
+    const float a = fmaxf(.5f * boat_geometry.length, 2 * cell);
+    const float d = fmaxf(.5f * boat_geometry.beam, 1.5f * cell);
+    const float rho_squared = longitudinal * longitudinal / (a * a) +
+                              transverse * transverse / (d * d);
+    if (rho_squared >= 1) return 0;
+    const float bump = 1 - rho_squared;
+    const float speed_squared = (b.vx * b.vx + b.vz * b.vz) / (1.875f * 1.875f);
+    const float relative_depth = fminf(1, depth / 3);
+    return .003f * relative_depth * sqrtf(relative_depth) *
+        (speed_squared / (1 + speed_squared)) * bump * bump * bump;
 }
 
 __global__ void update_velocity(const float* eta, float* u, float* v,
@@ -251,16 +230,16 @@ __global__ void update_velocity(const float* eta, float* u, float* v,
         const int y = i / (nx + 1);
         u[i] = (x == 0 || x == nx) ? 0.0f :
             (u[i] - gravity_dt * (eta[y * nx + x] - eta[y * nx + x - 1] +
-                wake_head((x + .5f) * dx, (y + .5f) * dz, *boat, dx, dz, depth) -
-                wake_head((x - .5f) * dx, (y + .5f) * dz, *boat, dx, dz, depth)) / dx) / drag;
+                hull_head((x + .5f) * dx, (y + .5f) * dz, *boat, dx, dz, depth) -
+                hull_head((x - .5f) * dx, (y + .5f) * dz, *boat, dx, dz, depth)) / dx) / drag;
     }
     if (i < (ny + 1) * nx) {
         const int x = i % nx;
         const int y = i / nx;
         v[i] = (y == 0 || y == ny) ? 0.0f :
             (v[i] - gravity_dt * (eta[y * nx + x] - eta[(y - 1) * nx + x] +
-                wake_head((x + .5f) * dx, (y + .5f) * dz, *boat, dx, dz, depth) -
-                wake_head((x + .5f) * dx, (y - .5f) * dz, *boat, dx, dz, depth)) / dz) / drag;
+                hull_head((x + .5f) * dx, (y + .5f) * dz, *boat, dx, dz, depth) -
+                hull_head((x + .5f) * dx, (y - .5f) * dz, *boat, dx, dz, depth)) / dz) / drag;
     }
 }
 

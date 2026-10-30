@@ -1187,7 +1187,6 @@ TEST_CASE("appearance", driven_real_boat_contacts_and_escapes_every_wall_and_cor
     app.frame(1, true, true, 120, .005f, 10, spawn_view, {1, 1});
     const auto paused = water::download_boat(simulation);
     CHECK(before_pause.x == paused.x && before_pause.z == paused.z && before_pause.yaw == paused.yaw);
-    CHECK(before_pause.wake_phase == paused.wake_phase);
     app.set_depth(.5f);
     scene.set_depth(.5f);
     app.reset();
