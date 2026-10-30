@@ -387,3 +387,175 @@ TEST_CASE("wake_reverse", released_history_survives_actual_reversal) {
     }
     CHECK(negative_samples >= 3);
 }
+
+#ifdef WATER_TIMING_DESKTOP
+#include "timeline.hpp"
+#include "app_controller.hpp"
+#include "water_renderer.hpp"
+#include "boat_renderer.hpp"
+#include "scene_renderer.hpp"
+
+TEST_CASE("wake_physics", continuity_timing_and_memory_sample) {
+    using Clock = std::chrono::steady_clock;
+    std::filesystem::create_directories("wake-physics");
+    std::ofstream csv("wake-physics/timing-memory.csv");
+    csv.exceptions(std::ios::badbit | std::ios::failbit);
+    csv << "nx,rain,substep,simulation_ms,fft_ms\n";
+    SetTraceLogLevel(LOG_WARNING);
+    InitWindow(1280, 800, "Water validation timing");
+    CHECK(IsWindowReady());
+    struct WindowCleanup { ~WindowCleanup() { CloseWindow(); } } window_cleanup;
+    water::select_gl_cuda_device();
+    // Warm driver/JIT bookkeeping before taking free-memory deltas.
+    { water::Simulation warmup(water::Config{}); warmup.step(1.f / 120, 2.5f);
+      CHECK(cudaStreamSynchronize(warmup.stream()) == cudaSuccess); }
+    for (int nx : {512, 2048}) {
+        for (float rate : {30.f, 120.f}) {
+            if (nx == 2048 && rate == 120) continue;
+            water::Config c;
+            c.grid.nx = c.grid.ny = nx;
+            c.rain_rate = rate;
+            std::size_t free_before = 0, total = 0, free_sim = 0, free_render = 0;
+            CHECK(cudaMemGetInfo(&free_before, &total) == cudaSuccess);
+            const auto started = Clock::now();
+            water::Simulation simulation(c);
+            CHECK(cudaStreamSynchronize(simulation.stream()) == cudaSuccess);
+            const double startup_ms = std::chrono::duration<double, std::milli>(Clock::now() - started).count();
+            CHECK(cudaMemGetInfo(&free_sim, &total) == cudaSuccess);
+            const auto resources = water::fft_resources(simulation);
+            water::WaterRenderer renderer(c.grid);
+            water::BoatRenderer boat(c.grid);
+            water::SceneRenderer scene(c);
+            CHECK(scene.resize(1280, 800));
+            renderer.update(simulation);
+            boat.update(simulation);
+            const float distance = 1.65f * std::max(c.grid.lx, c.grid.lz);
+            Camera3D camera{};
+            camera.position = {distance * std::cos(.72f) * std::sin(.65f), distance * std::sin(.72f),
+                               distance * std::cos(.72f) * std::cos(.65f)};
+            camera.up = {0, 1, 0}; camera.fovy = 42; camera.projection = CAMERA_PERSPECTIVE;
+            const water::SpawnView view{camera, 1280.f / 800};
+            water::DropScheduler scheduler(c);
+            BeginDrawing(); scene.draw(camera, renderer, boat, scheduler.active(), 0, c.reflection); EndDrawing();
+            CHECK(cudaStreamSynchronize(simulation.stream()) == cudaSuccess);
+            CHECK(cudaMemGetInfo(&free_render, &total) == cudaSuccess);
+            cudaEvent_t begin = nullptr, end = nullptr, fft_begin = nullptr, fft_end = nullptr;
+            CHECK(cudaEventCreate(&begin) == cudaSuccess);
+            CHECK(cudaEventCreate(&end) == cudaSuccess);
+            CHECK(cudaEventCreate(&fft_begin) == cudaSuccess);
+            CHECK(cudaEventCreate(&fft_end) == cudaSuccess);
+            struct Events {
+                water::Simulation& simulation;
+                cudaEvent_t begin, end, fft_begin, fft_end;
+                ~Events() {
+                    water::set_fft_timing_events(simulation, nullptr, nullptr);
+                    cudaEventDestroy(begin); cudaEventDestroy(end);
+                    cudaEventDestroy(fft_begin); cudaEventDestroy(fft_end);
+                }
+            } events{simulation, begin, end, fft_begin, fft_end};
+            water::set_fft_timing_events(simulation, fft_begin, fft_end);
+            const int subdivisions = water::substeps_per_quantum(c);
+            const float dt = float(water::FixedClock::quantum / subdivisions);
+            const int warmup_ticks = nx == 512 ? 1200 : 120;
+            const int sample_ticks = nx == 512 ? 7200 : 600;
+            std::vector<double> gpu, fft;
+            double peak = 0, mean_max = 0;
+            const auto timed_started = Clock::now();
+            for (int tick = 0; tick < warmup_ticks + sample_ticks; ++tick) {
+                const auto phase = tick % (32 * 120);
+                water::BoatControl control;
+                if (phase < 12 * 120) control = {1, 0};
+                else if (phase < 20 * 120) control = {1, .55f};
+                else if (phase < 28 * 120) control = {-1, -.65f};
+                else control = {1, -1};
+                const auto impacts = scheduler.tick((tick + 1) * water::FixedClock::quantum, true,
+                                                    rate, c.impact_strength, view);
+                for (std::size_t first = 0; first < impacts.size(); first += 64)
+                    simulation.apply_impacts(impacts.data() + first, std::min<std::size_t>(64, impacts.size() - first));
+                for (int substep = 0; substep < subdivisions; ++substep) {
+                    CHECK(cudaEventRecord(begin, simulation.stream()) == cudaSuccess);
+                    simulation.step(dt, c.damping, control);
+                    CHECK(cudaEventRecord(end, simulation.stream()) == cudaSuccess);
+                    // Collect this substep before the borrowed FFT events can be recorded again.
+                    CHECK(cudaEventSynchronize(end) == cudaSuccess);
+                    float gpu_ms = 0, fft_ms = 0;
+                    CHECK(cudaEventElapsedTime(&gpu_ms, begin, end) == cudaSuccess);
+                    CHECK(cudaEventElapsedTime(&fft_ms, fft_begin, fft_end) == cudaSuccess);
+                    if (tick >= warmup_ticks) {
+                        gpu.push_back(gpu_ms); fft.push_back(fft_ms);
+                        csv << nx << ',' << rate << ',' << (tick - warmup_ticks) * subdivisions + substep
+                            << ',' << gpu_ms << ',' << fft_ms << '\n';
+                    }
+                }
+                if ((tick + 1) % 120 == 0) {
+                    const auto state = water::download(simulation);
+                    double mean = 0;
+                    for (float value : state.eta) {
+                        CHECK(std::isfinite(value));
+                        peak = std::max(peak, std::abs(double(value))); mean += value;
+                    }
+                    for (const auto* field : {&state.u, &state.v})
+                        for (float value : *field) CHECK(std::isfinite(value));
+                    mean_max = std::max(mean_max, std::abs(mean / state.eta.size()));
+                }
+            }
+            const double elapsed_s = std::chrono::duration<double>(Clock::now() - timed_started).count();
+            {
+                water::set_fft_timing_events(simulation, nullptr, nullptr);
+                water::AppController app(simulation, c);
+                app.reset();
+                SetTargetFPS(60);
+                std::vector<double> frames;
+                const auto realtime_start = Clock::now();
+                auto previous = realtime_start;
+                double offered = 0;
+                int capped_frames = 0, maximum_quanta = 0;
+                while (std::chrono::duration<double>(Clock::now() - realtime_start).count() < 6) {
+                    const auto now = Clock::now();
+                    const double seconds = std::chrono::duration<double>(now - previous).count();
+                    previous = now;
+                    offered += seconds;
+                    if (seconds >= 1. / 120 * 9) ++capped_frames;
+                    const double old_time = app.sim_time();
+                    app.frame(seconds, false, true, rate, c.impact_strength, c.damping, view, {1, 0});
+                    maximum_quanta = std::max(maximum_quanta, int(std::llround((app.sim_time() - old_time) * 120)));
+                    renderer.update(simulation); boat.update(simulation);
+                    BeginDrawing(); scene.draw(camera, renderer, boat, app.drops(), app.sim_time(), c.reflection); EndDrawing();
+                    if (std::chrono::duration<double>(now - realtime_start).count() >= 1)
+                        frames.push_back(seconds * 1000);
+                }
+                const double frame_mean = std::accumulate(frames.begin(), frames.end(), 0.) / frames.size();
+                std::sort(frames.begin(), frames.end());
+                std::cout << "PRACTICAL nx=" << nx << " rain=" << rate << " frame_mean_ms=" << frame_mean
+                          << " frame_p95_ms=" << frames[std::size_t(.95 * (frames.size() - 1))]
+                          << " samples=" << frames.size() << " offered_wall_s=" << offered
+                          << " simulated_s=" << app.sim_time() << " discarded_plus_fraction_s=" << offered - app.sim_time()
+                          << " frames_over_9_quanta=" << capped_frames << " maximum_quanta=" << maximum_quanta << std::endl;
+            }
+            CHECK(peak < .1 * c.depth);
+            CHECK(mean_max < 1e-5);
+            const double gpu_mean = std::accumulate(gpu.begin(), gpu.end(), 0.) / gpu.size();
+            const double fft_mean = std::accumulate(fft.begin(), fft.end(), 0.) / fft.size();
+            std::sort(gpu.begin(), gpu.end()); std::sort(fft.begin(), fft.end());
+            std::size_t free_after = 0;
+            CHECK(cudaMemGetInfo(&free_after, &total) == cudaSuccess);
+            const std::size_t cells = std::size_t(nx) * nx;
+            const std::size_t state_bytes = (cells + 2 * std::size_t(nx + 1) * nx) * sizeof(float);
+            std::cout << "TIMING nx=" << nx << " rain=" << rate << " substeps=" << subdivisions
+                      << " samples=" << gpu.size() << " gpu_substep_mean_ms=" << gpu_mean
+                      << " gpu_substep_p95_ms=" << gpu[std::size_t(.95 * (gpu.size() - 1))]
+                      << " fft_mean_ms=" << fft_mean << " fft_p95_ms=" << fft[std::size_t(.95 * (fft.size() - 1))]
+                      << " fft_fraction=" << fft_mean / gpu_mean << " startup_ms=" << startup_ms
+                      << " sim_delta_bytes=" << free_before - free_sim
+                      << " render_delta_bytes=" << free_sim - free_render
+                      << " peak_observed_delta_bytes=" << free_before - std::min(free_render, free_after)
+                      << " headroom_bytes=" << std::min(free_render, free_after)
+                      << " workspace_bytes=" << resources.workspace_bytes << " mirrored_real_bytes=" << resources.real_bytes
+                      << " spectrum_bytes=" << resources.spectral_bytes << " two_weight_banks_bytes=" << resources.weights_bytes
+                      << " state_bytes=" << state_bytes << " water_vbo_bytes=" << 12 * cells * sizeof(water::Vertex)
+                      << " wall_sample_seconds=" << elapsed_s << " simulated_seconds=" << (warmup_ticks + sample_ticks) / 120.
+                      << " peak_eta=" << peak << " max_abs_mean=" << mean_max << std::endl;
+        }
+    }
+}
+#endif
