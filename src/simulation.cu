@@ -217,7 +217,7 @@ __device__ float hull_head(float x, float z, const BoatState& b,
     const float bump = 1 - rho_squared;
     const float speed_squared = (b.vx * b.vx + b.vz * b.vz) / (1.875f * 1.875f);
     const float relative_depth = fminf(1, depth / 3);
-    return .003f * relative_depth * sqrtf(relative_depth) *
+    return .045f * relative_depth * sqrtf(relative_depth) *
         (speed_squared / (1 + speed_squared)) * bump * bump * bump;
 }
 

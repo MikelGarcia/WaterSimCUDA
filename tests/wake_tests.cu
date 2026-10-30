@@ -22,7 +22,7 @@ double head(double x, double z, const water::BoatState &b, const water::Config &
     const double rho = l * l / (a * a) + t * t / (d * d);
     const double speed = (double(b.vx) * b.vx + double(b.vz) * b.vz) / (1.875 * 1.875);
     return rho >= 1 ? 0
-                    : .003 * std::pow(std::min(1.0, double(c.depth) / 3), 1.5) * speed / (1 + speed) *
+                    : .045 * std::pow(std::min(1.0, double(c.depth) / 3), 1.5) * speed / (1 + speed) *
                           std::pow(1 - rho, 3);
 }
 water::Snapshot forced(water::Simulation &s, const water::Config &c, water::BoatState b, float dt,

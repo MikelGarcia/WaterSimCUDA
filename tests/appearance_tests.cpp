@@ -1204,11 +1204,13 @@ TEST_CASE("wake_visual", time_ordered_maneuver_artifacts) {
     const Camera3D views[]{
         {{13.3f,21.76f,17.49f},{0,0,0},{0,1,0},42,CAMERA_PERSPECTIVE},
         {{-3,5.5f,8},{-2,0,0},{0,1,0},42,CAMERA_PERSPECTIVE}};
+    const double regions[][4]{{5,7,5,7},{9.8,10.8,5.6,6.4}};
     bool visible = true;
     for (int rate : {0, 30, 120}) {
         const auto directory = std::filesystem::path("wake-temporal") / TextFormat("rain%d", rate);
         std::filesystem::create_directories(directory);
         water::Simulation simulation(config);
+        water::Simulation released(config);
         water::AppController app(simulation, config);
         water::WaterRenderer renderer(config.grid);
         water::BoatRenderer boat(config.grid);
@@ -1220,11 +1222,11 @@ TEST_CASE("wake_visual", time_ordered_maneuver_artifacts) {
         std::ofstream probes(directory / "water.csv");
         CHECK(manifest.is_open() && probes.is_open());
         manifest << std::setprecision(10)
-                 << "frame,time,state,x,z,yaw,vx,vz,view,roi_pixels,changed,signal_rgb,noise_rgb,eta_rms,eta_change_rms,support_clearance\n";
-        probes << std::setprecision(10) << "frame,time,x,z,eta\n";
+                 << "frame,time,state,x,z,yaw,vx,vz,view,region,roi_pixels,changed,signal_rgb,noise_rgb,eta_rms,eta_change_rms,support_clearance,incoming_fraction\n";
+        probes << std::setprecision(10) << "frame,time,region,x,z,eta\n";
         water::Snapshot previous;
-        double clearance = 100;
-        int visible_released[2]{};
+        double clearance[]{100,100};
+        int consecutive[2][2]{}, longest[2][2]{};
         bool saw_stop = false, saw_turn = false;
         const double dx = double(config.grid.lx)/config.grid.nx;
         const double dz = double(config.grid.lz)/config.grid.ny;
@@ -1237,40 +1239,57 @@ TEST_CASE("wake_visual", time_ordered_maneuver_artifacts) {
                 const auto pose = water::download_boat(simulation);
                 water::BoatControl control;
                 if (time < 4) control = {1,0};
-                else if (time >= 5 && time < 7 && pose.vx > .015f) control = {-1,0};
-                else if (time >= 7) control = {1,.7f};
+                else if (time >= 5 && time < 6.5 && pose.vx > .015f) control = {-1,0};
+                else if (time >= 6.5) control = {1,time >= 9 ? .7f : 0.f};
+                if (frame > 90) released.step(float(water::FixedClock::quantum),config.damping);
                 app.frame(water::FixedClock::quantum,false,rate>0,float(rate),
                           config.impact_strength,config.damping,spawn_view,control);
-                if (time >= 4) {
+                for (int region = 0; region < 2; ++region) if (frame*12+tick >= (region == 0 ? 40 : 90)*12+11) {
                     const auto next = water::download_boat(simulation);
-                    const double x = std::clamp(double(next.x),5.0,7.0);
-                    const double z = std::clamp(double(next.z),5.0,7.0);
-                    clearance = std::min(clearance,std::hypot(next.x-x,next.z-z)-support);
+                    const auto& bounds = regions[region];
+                    const double x = std::clamp(double(next.x),bounds[0],bounds[1]);
+                    const double z = std::clamp(double(next.z),bounds[2],bounds[3]);
+                    clearance[region] = std::min(clearance[region],std::hypot(next.x-x,next.z-z)-support);
                 }
             }
             const double time = app.sim_time();
             CHECK_NEAR(time,frame*.1,1e-9);
             const auto pose = water::download_boat(simulation);
-            const char* maneuver = time < 2 ? "accelerate" : time < 4 ? "steady" : time < 5 ? "slow" : time < 7 ? "stop" : "turn";
-            saw_stop |= time >= 6 && time < 7 && std::hypot(pose.vx,pose.vz)<.03f;
-            saw_turn |= time > 8 && std::abs(pose.yaw)>.3f;
+            const char* maneuver = time < 2 ? "accelerate" : time < 4 ? "steady" : time < 5 ? "slow" : time < 6.5 ? "stop" : time < 9 ? "reaccelerate" : "turn";
+            saw_stop |= time >= 6 && time < 6.5 && std::hypot(pose.vx,pose.vz)<.03f;
+            saw_turn |= time > 9 && std::abs(pose.yaw)>.3f;
             const auto state = water::download(simulation);
-            double energy = 0, change = 0;
-            int cells = 0;
-            for (int y = 0; y < config.grid.ny; ++y) for (int x = 0; x < config.grid.nx; ++x) {
-                const double wx = (x+.5)*dx, wz = (y+.5)*dz;
-                if (wx<5 || wx>7 || wz<5 || wz>7) continue;
-                const int index = y*config.grid.nx+x;
-                energy += double(state.eta[index])*state.eta[index];
-                if (!previous.eta.empty()) {
-                    const double delta = state.eta[index]-previous.eta[index];
-                    change += delta*delta;
+            // Continue the pre-turn field without new pressure or rain, to bound incoming waves.
+            if (frame == 90) water::upload(released,state);
+            const auto old = frame >= 90 ? water::download(released) : water::Snapshot{};
+            double incoming_energy = 0, old_energy = 0;
+            double rms[2]{}, change_rms[2]{};
+            for (int region = 0; region < 2; ++region) {
+                double energy = 0, change = 0;
+                int cells = 0;
+                const auto& bounds = regions[region];
+                for (int y = 0; y < config.grid.ny; ++y) for (int x = 0; x < config.grid.nx; ++x) {
+                    const double wx = (x+.5)*dx, wz = (y+.5)*dz;
+                    if (wx<bounds[0] || wx>bounds[1] || wz<bounds[2] || wz>bounds[3]) continue;
+                    const int index = y*config.grid.nx+x;
+                    energy += double(state.eta[index])*state.eta[index];
+                    if (region == 1 && frame >= 90) {
+                        const double incoming = state.eta[index]-old.eta[index];
+                        incoming_energy += incoming*incoming;
+                        old_energy += double(old.eta[index])*old.eta[index];
+                    }
+                    if (!previous.eta.empty()) {
+                        const double delta = state.eta[index]-previous.eta[index];
+                        change += delta*delta;
+                    }
+                    ++cells;
+                    probes << frame << ',' << time << ',' << region << ',' << wx << ',' << wz << ',' << state.eta[index] << '\n';
                 }
-                ++cells;
-                probes << frame << ',' << time << ',' << wx << ',' << wz << ',' << state.eta[index] << '\n';
+                CHECK(cells > 500);
+                rms[region] = std::sqrt(energy/cells);
+                change_rms[region] = std::sqrt(change/cells);
             }
-            CHECK(cells > 1000);
-            const double rms = std::sqrt(energy/cells), change_rms = std::sqrt(change/cells);
+            const double incoming_fraction = old_energy > 0 ? std::sqrt(incoming_energy/old_energy) : 0;
             auto flat = state;
             for (auto* field : {&flat.eta,&flat.u,&flat.v}) std::fill(field->begin(),field->end(),0);
             boat.update(simulation);
@@ -1294,31 +1313,38 @@ TEST_CASE("wake_visual", time_ordered_maneuver_artifacts) {
                     UnloadImage(image);
                     EndDrawing();
                 }
-                double signal = 0, noise = 0;
-                int changed = 0, pixels = 0;
-                for (int y = 0; y < 560; ++y) for (int x = 0; x < 840; ++x) {
-                    const Ray ray = GetScreenToWorldRay({float(x),float(y)},views[view]);
-                    const float distance = -ray.position.y/ray.direction.y;
-                    const float wx = ray.position.x+distance*ray.direction.x+10;
-                    const float wz = ray.position.z+distance*ray.direction.z+6;
-                    if (distance<=0 || wx<5 || wx>7 || wz<5 || wz>7) continue;
-                    const int index = y*840+x;
-                    const auto a = images[0][index], b = images[1][index], c = images[2][index];
-                    const int delta = std::abs(int(a.r)-b.r)+std::abs(int(a.g)-b.g)+std::abs(int(a.b)-b.b);
-                    signal += delta;
-                    noise += std::abs(int(b.r)-c.r)+std::abs(int(b.g)-c.g)+std::abs(int(b.b)-c.b);
-                    changed += delta>3;
-                    ++pixels;
+                for (int region = 0; region < 2; ++region) {
+                    const auto& bounds = regions[region];
+                    double signal = 0, noise = 0;
+                    int changed = 0, pixels = 0;
+                    for (int y = 0; y < 560; ++y) for (int x = 0; x < 840; ++x) {
+                        const Ray ray = GetScreenToWorldRay({float(x),float(y)},views[view]);
+                        const float distance = -ray.position.y/ray.direction.y;
+                        const float wx = ray.position.x+distance*ray.direction.x+10;
+                        const float wz = ray.position.z+distance*ray.direction.z+6;
+                        if (distance<=0 || wx<bounds[0] || wx>bounds[1] || wz<bounds[2] || wz>bounds[3]) continue;
+                        const int index = y*840+x;
+                        const auto a = images[0][index], b = images[1][index], c = images[2][index];
+                        const int delta = std::abs(int(a.r)-b.r)+std::abs(int(a.g)-b.g)+std::abs(int(a.b)-b.b);
+                        signal += delta;
+                        noise += std::abs(int(b.r)-c.r)+std::abs(int(b.g)-c.g)+std::abs(int(b.b)-c.b);
+                        changed += delta>3;
+                        ++pixels;
+                    }
+                    CHECK(pixels>100);
+                    signal /= 3*pixels;
+                    noise /= 3*pixels;
+                    // Half an 8-bit channel level and 1% changed pixels exceed resolved capture noise.
+                    const bool window = region == 0 ? frame>=40 && frame<=45 : frame>=91 && frame<=95;
+                    const bool resolved = window && signal>std::max(.5,8*noise) && changed>pixels*.01 && change_rms[region]>1e-7
+                                        && (region == 0 || incoming_fraction<.25);
+                    consecutive[region][view] = resolved ? consecutive[region][view]+1 : 0;
+                    longest[region][view] = std::max(longest[region][view],consecutive[region][view]);
+                    manifest << frame << ',' << time << ',' << maneuver << ',' << pose.x << ',' << pose.z << ',' << pose.yaw
+                             << ',' << pose.vx << ',' << pose.vz << ',' << view << ',' << region << ',' << pixels << ',' << changed
+                             << ',' << signal << ',' << noise << ',' << rms[region] << ',' << change_rms[region] << ',' << clearance[region]
+                             << ',' << incoming_fraction << '\n';
                 }
-                CHECK(pixels>100);
-                signal /= 3*pixels;
-                noise /= 3*pixels;
-                // Half an 8-bit channel level and 1% changed pixels exceed resolved capture noise.
-                if (time>=4 && time<=4.5 && signal>std::max(.5,8*noise) && changed>pixels*.01 && change_rms>1e-7)
-                    ++visible_released[view];
-                manifest << frame << ',' << time << ',' << maneuver << ',' << pose.x << ',' << pose.z << ',' << pose.yaw
-                         << ',' << pose.vx << ',' << pose.vz << ',' << view << ',' << pixels << ',' << changed
-                         << ',' << signal << ',' << noise << ',' << rms << ',' << change_rms << ',' << clearance << '\n';
             }
             water::upload(simulation,state);
             previous = state;
@@ -1326,25 +1352,30 @@ TEST_CASE("wake_visual", time_ordered_maneuver_artifacts) {
         }
         manifest.close(); probes.close();
         CHECK(manifest.good() && probes.good());
-        CHECK(saw_stop && saw_turn && clearance>.1);
-        std::cout << "TEMPORAL rain=" << rate << " short-release visible frames=" << visible_released[0] << ',' << visible_released[1]
-                  << " support clearance=" << clearance << '\n';
-        visible &= visible_released[0]>=3 && visible_released[1]>=3;
+        CHECK(saw_stop && saw_turn);
+        for (int region = 0; region < 2; ++region) {
+            CHECK(clearance[region]>.1);
+            std::cout << "TEMPORAL rain=" << rate << " region=" << region << " consecutive visible frames=" << longest[region][0] << ',' << longest[region][1]
+                      << " support clearance=" << clearance[region] << '\n';
+            visible &= longest[region][0]>=3 && longest[region][1]>=3;
+        }
         CHECK(std::filesystem::exists(directory / "frames.csv"));
         std::ifstream saved(directory / "frames.csv");
         std::string line;
         CHECK(bool(std::getline(saved,line)) && line.find("time,state,x,z,yaw,vx,vz")!=std::string::npos);
-        for (int row = 0; row < 242; ++row) {
+        for (int row = 0; row < 484; ++row) {
             CHECK(bool(std::getline(saved,line)));
             std::istringstream values(line);
             std::string value;
-            CHECK(bool(std::getline(values,value,',')) && std::stoi(value)==row/2);
+            CHECK(bool(std::getline(values,value,',')) && std::stoi(value)==row/4);
             CHECK(bool(std::getline(values,value,',')));
-            CHECK_NEAR(std::stod(value),row/2*.1,1e-9);
+            CHECK_NEAR(std::stod(value),row/4*.1,1e-9);
             CHECK(bool(std::getline(values,value,',')) && !value.empty());
-            for (int column = 0; column < 6; ++column) {
+            for (int column = 0; column < 5; ++column) {
                 CHECK(bool(std::getline(values,value,',')) && std::isfinite(std::stod(value)));
             }
+            CHECK(bool(std::getline(values,value,',')) && std::stoi(value)==row%4/2);
+            CHECK(bool(std::getline(values,value,',')) && std::stoi(value)==row%2);
         }
         CHECK(!std::getline(saved,line));
         for (int frame = 0; frame <= 120; ++frame) {
