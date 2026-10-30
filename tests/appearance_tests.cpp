@@ -12,6 +12,8 @@
 #include <iostream>
 #include <fstream>
 #include <filesystem>
+#include <iomanip>
+#include <sstream>
 
 
 
@@ -1196,172 +1198,161 @@ TEST_CASE("appearance", driven_real_boat_contacts_and_escapes_every_wall_and_cor
     capture("boat-captures/depth-reset.png", reset, false);
 }
 
-TEST_CASE("wake_visual", default_rendered_trail) {
+TEST_CASE("wake_visual", time_ordered_maneuver_artifacts) {
     Context context;
-    water::Config config;
-    water::Simulation simulation(config);
-    water::WaterRenderer renderer(config.grid);
-    water::BoatRenderer boat(config.grid);
-    water::SceneRenderer scene(config);
-    CHECK(scene.resize(840, 560));
-    water::upload_boat(simulation, {5, 6, 0, 0, 0, 0});
-    const float dt = float(water::stable_dt(config)) * .8f;
-    for (float time = 0; time < 3; time += dt)
-        simulation.step(dt, config.damping, {1, 0});
-    const auto state = water::download(simulation);
-    const auto pose = water::download_boat(simulation);
-    const Vector3 target{pose.x - 10, 0, pose.z - 6};
+    const water::Config config;
     const Camera3D views[]{
-        {{13.3f, 21.76f, 17.49f}, {0, 0, 0}, {0, 1, 0}, 42, CAMERA_PERSPECTIVE},
-        {{target.x + 1.5f, 1.5f, target.z + 2}, target, {0, 1, 0}, 42, CAMERA_PERSPECTIVE},
-        {{target.x, 4, target.z}, target, {0, 0, -1}, 42, CAMERA_PERSPECTIVE}};
-    std::filesystem::create_directories("boat-captures");
-    for (int view = 0; view < 3; ++view) {
-        std::vector<Color> disturbed;
-        for (int flat = 0; flat < 2; ++flat) {
-            auto surface = state;
-            if (flat) {
-                for (auto* values : {&surface.eta, &surface.u, &surface.v})
-                    std::fill(values->begin(), values->end(), 0);
+        {{13.3f,21.76f,17.49f},{0,0,0},{0,1,0},42,CAMERA_PERSPECTIVE},
+        {{-3,5.5f,8},{-2,0,0},{0,1,0},42,CAMERA_PERSPECTIVE}};
+    bool visible = true;
+    for (int rate : {0, 30, 120}) {
+        const auto directory = std::filesystem::path("wake-temporal") / TextFormat("rain%d", rate);
+        std::filesystem::create_directories(directory);
+        water::Simulation simulation(config);
+        water::AppController app(simulation, config);
+        water::WaterRenderer renderer(config.grid);
+        water::BoatRenderer boat(config.grid);
+        water::SceneRenderer scene(config);
+        CHECK(scene.resize(840,560));
+        water::upload_boat(simulation,{4,6,0,0,0,0});
+        const water::SpawnView spawn_view{views[0],1.5f};
+        std::ofstream manifest(directory / "frames.csv");
+        std::ofstream probes(directory / "water.csv");
+        CHECK(manifest.is_open() && probes.is_open());
+        manifest << std::setprecision(10)
+                 << "frame,time,state,x,z,yaw,vx,vz,view,roi_pixels,changed,signal_rgb,noise_rgb,eta_rms,eta_change_rms,support_clearance\n";
+        probes << std::setprecision(10) << "frame,time,x,z,eta\n";
+        water::Snapshot previous;
+        double clearance = 100;
+        int visible_released[2]{};
+        bool saw_stop = false, saw_turn = false;
+        const double dx = double(config.grid.lx)/config.grid.nx;
+        const double dz = double(config.grid.lz)/config.grid.ny;
+        // Encloses rotated compact pressure and the centered-gradient halo.
+        const double support = std::hypot(std::max(.3,2*dx),std::max(.5*water::boat_geometry.beam,1.5*dx))
+                             + 2*std::hypot(dx,dz);
+        for (int frame = 0; frame <= 120; ++frame) {
+            for (int tick = 0; frame > 0 && tick < 12; ++tick) {
+                const double time = app.sim_time();
+                const auto pose = water::download_boat(simulation);
+                water::BoatControl control;
+                if (time < 4) control = {1,0};
+                else if (time >= 5 && time < 7 && pose.vx > .015f) control = {-1,0};
+                else if (time >= 7) control = {1,.7f};
+                app.frame(water::FixedClock::quantum,false,rate>0,float(rate),
+                          config.impact_strength,config.damping,spawn_view,control);
+                if (time >= 4) {
+                    const auto next = water::download_boat(simulation);
+                    const double x = std::clamp(double(next.x),5.0,7.0);
+                    const double z = std::clamp(double(next.z),5.0,7.0);
+                    clearance = std::min(clearance,std::hypot(next.x-x,next.z-z)-support);
+                }
             }
-            water::upload(simulation, surface);
-            renderer.update(simulation);
+            const double time = app.sim_time();
+            CHECK_NEAR(time,frame*.1,1e-9);
+            const auto pose = water::download_boat(simulation);
+            const char* maneuver = time < 2 ? "accelerate" : time < 4 ? "steady" : time < 5 ? "slow" : time < 7 ? "stop" : "turn";
+            saw_stop |= time >= 6 && time < 7 && std::hypot(pose.vx,pose.vz)<.03f;
+            saw_turn |= time > 8 && std::abs(pose.yaw)>.3f;
+            const auto state = water::download(simulation);
+            double energy = 0, change = 0;
+            int cells = 0;
+            for (int y = 0; y < config.grid.ny; ++y) for (int x = 0; x < config.grid.nx; ++x) {
+                const double wx = (x+.5)*dx, wz = (y+.5)*dz;
+                if (wx<5 || wx>7 || wz<5 || wz>7) continue;
+                const int index = y*config.grid.nx+x;
+                energy += double(state.eta[index])*state.eta[index];
+                if (!previous.eta.empty()) {
+                    const double delta = state.eta[index]-previous.eta[index];
+                    change += delta*delta;
+                }
+                ++cells;
+                probes << frame << ',' << time << ',' << wx << ',' << wz << ',' << state.eta[index] << '\n';
+            }
+            CHECK(cells > 1000);
+            const double rms = std::sqrt(energy/cells), change_rms = std::sqrt(change/cells);
+            auto flat = state;
+            for (auto* field : {&flat.eta,&flat.u,&flat.v}) std::fill(field->begin(),field->end(),0);
             boat.update(simulation);
-            BeginDrawing();
-            scene.draw(views[view], renderer, boat, {}, 3, .7f);
-            const auto image = LoadImageFromScreen();
-            CHECK(image.data);
-            const auto colors = LoadImageColors(image);
-            CHECK(colors);
-            int changed = 0;
-            int bow_shoulders[2]{};
-            double difference = 0;
-            if (!flat) {
-                disturbed.assign(colors, colors + image.width * image.height);
-            } else {
-                for (int i = 0; i < image.width * image.height; ++i) {
-                    const auto a = disturbed[i], b = colors[i];
-                    const int delta = std::abs(int(a.r) - b.r) + std::abs(int(a.g) - b.g) +
-                                      std::abs(int(a.b) - b.b);
-                    difference += delta;
-                    changed += delta > 3;
-                    if (view == 2 && delta > 3) {
-                        const Ray ray = GetScreenToWorldRay(
-                            {float(i % image.width), float(i / image.width)}, views[view]);
-                        const float distance = -ray.position.y / ray.direction.y;
-                        const float l = ray.position.x + distance * ray.direction.x - target.x;
-                        const float t = ray.position.z + distance * ray.direction.z - target.z;
-                        const float ridge = .7f * (.3f - l);
-                        if (l > .02f && l < .18f && std::abs(t) > .09f &&
-                            std::abs(std::abs(t) - ridge) < .06f)
-                            ++bow_shoulders[t > 0];
+            for (int view = 0; view < 2; ++view) {
+                std::array<std::vector<Color>,3> images;
+                for (int pass = 0; pass < 3; ++pass) {
+                    water::upload(simulation,pass == 0 ? state : flat);
+                    renderer.update(simulation);
+                    BeginDrawing();
+                    scene.draw(views[view],renderer,boat,app.drops(),time,config.reflection);
+                    const Image image = LoadImageFromScreen();
+                    CHECK(image.data && image.width == 840 && image.height == 560);
+                    const auto colors = LoadImageColors(image);
+                    CHECK(colors);
+                    images[pass].assign(colors,colors+840*560);
+                    if (pass < 2) {
+                        const auto path = directory / TextFormat(pass == 0 ? "frame-%03d-view%d.png" : "flat-%03d-view%d.png",frame,view);
+                        CHECK(ExportImage(image,path.string().c_str()));
                     }
+                    UnloadImageColors(colors);
+                    UnloadImage(image);
+                    EndDrawing();
                 }
+                double signal = 0, noise = 0;
+                int changed = 0, pixels = 0;
+                for (int y = 0; y < 560; ++y) for (int x = 0; x < 840; ++x) {
+                    const Ray ray = GetScreenToWorldRay({float(x),float(y)},views[view]);
+                    const float distance = -ray.position.y/ray.direction.y;
+                    const float wx = ray.position.x+distance*ray.direction.x+10;
+                    const float wz = ray.position.z+distance*ray.direction.z+6;
+                    if (distance<=0 || wx<5 || wx>7 || wz<5 || wz>7) continue;
+                    const int index = y*840+x;
+                    const auto a = images[0][index], b = images[1][index], c = images[2][index];
+                    const int delta = std::abs(int(a.r)-b.r)+std::abs(int(a.g)-b.g)+std::abs(int(a.b)-b.b);
+                    signal += delta;
+                    noise += std::abs(int(b.r)-c.r)+std::abs(int(b.g)-c.g)+std::abs(int(b.b)-c.b);
+                    changed += delta>3;
+                    ++pixels;
+                }
+                CHECK(pixels>100);
+                signal /= 3*pixels;
+                noise /= 3*pixels;
+                // Half an 8-bit channel level and 1% changed pixels exceed resolved capture noise.
+                if (time>=4 && time<=4.5 && signal>std::max(.5,8*noise) && changed>pixels*.01 && change_rms>1e-7)
+                    ++visible_released[view];
+                manifest << frame << ',' << time << ',' << maneuver << ',' << pose.x << ',' << pose.z << ',' << pose.yaw
+                         << ',' << pose.vx << ',' << pose.vz << ',' << view << ',' << pixels << ',' << changed
+                         << ',' << signal << ',' << noise << ',' << rms << ',' << change_rms << ',' << clearance << '\n';
             }
-            UnloadImageColors(colors);
-            const bool saved = ExportImage(image, TextFormat("boat-captures/wake-%d-%d.png", view, flat));
-            UnloadImage(image);
-            EndDrawing();
-            CHECK(saved);
-            if (flat) {
-                std::cout << "WAKE RENDER view=" << view << " mean RGB=" << difference / (3 * 840 * 560)
-                          << " changed pixels=" << changed << '\n';
-                // The old attached pressure changed only 14 overview / 2466 close pixels.
-                const int minimum_changed[]{50, 10000, 3000};
-                CHECK(changed > minimum_changed[view]);
-                if (view == 2) {
-                    std::cout << "BOW SHOULDERS changed pixels=" << bow_shoulders[0]
-                              << ',' << bow_shoulders[1] << '\n';
-                    CHECK(bow_shoulders[0] > 20 && bow_shoulders[1] > 20);
-                }
+            water::upload(simulation,state);
+            previous = state;
+            CHECK(glGetError()==GL_NO_ERROR);
+        }
+        manifest.close(); probes.close();
+        CHECK(manifest.good() && probes.good());
+        CHECK(saw_stop && saw_turn && clearance>.1);
+        std::cout << "TEMPORAL rain=" << rate << " short-release visible frames=" << visible_released[0] << ',' << visible_released[1]
+                  << " support clearance=" << clearance << '\n';
+        visible &= visible_released[0]>=3 && visible_released[1]>=3;
+        CHECK(std::filesystem::exists(directory / "frames.csv"));
+        std::ifstream saved(directory / "frames.csv");
+        std::string line;
+        CHECK(bool(std::getline(saved,line)) && line.find("time,state,x,z,yaw,vx,vz")!=std::string::npos);
+        for (int row = 0; row < 242; ++row) {
+            CHECK(bool(std::getline(saved,line)));
+            std::istringstream values(line);
+            std::string value;
+            CHECK(bool(std::getline(values,value,',')) && std::stoi(value)==row/2);
+            CHECK(bool(std::getline(values,value,',')));
+            CHECK_NEAR(std::stod(value),row/2*.1,1e-9);
+            CHECK(bool(std::getline(values,value,',')) && !value.empty());
+            for (int column = 0; column < 6; ++column) {
+                CHECK(bool(std::getline(values,value,',')) && std::isfinite(std::stod(value)));
+            }
+        }
+        CHECK(!std::getline(saved,line));
+        for (int frame = 0; frame <= 120; ++frame) {
+            for (int view = 0; view < 2; ++view) {
+                CHECK(std::filesystem::file_size(directory / TextFormat("frame-%03d-view%d.png", frame, view)) > 1000);
+                CHECK(std::filesystem::file_size(directory / TextFormat("flat-%03d-view%d.png", frame, view)) > 1000);
             }
         }
     }
-}
-
-TEST_CASE("wake_visual", released_wave_remains_visible_outside_the_pressure_support) {
-    Context context;
-    water::Config config;
-    water::Simulation simulation(config);
-    water::WaterRenderer renderer(config.grid);
-    water::BoatRenderer boat(config.grid);
-    water::SceneRenderer scene(config);
-    CHECK(scene.resize(840, 560));
-    water::upload_boat(simulation, {5, 6, 0, 0, 0, 0});
-    const float dt = float(water::stable_dt(config)) * .8f;
-    for (float time = 0; time < 3; time += dt)
-        simulation.step(dt, config.damping, {1, 0});
-    const auto pose = water::download_boat(simulation);
-    water::upload_boat(simulation, {pose.x, pose.z, pose.yaw, 0, 0, 0});
-    const Vector3 target{pose.x - 10, 0, pose.z - 6};
-    const double dx = double(config.grid.lx) / config.grid.nx;
-    const double dz = double(config.grid.lz) / config.grid.ny;
-    const double cell = std::max(dx, dz);
-    const double length = std::max(double(water::boat_geometry.length), 4 * cell);
-    const double support_radius = std::hypot(2 * length - .5 * water::boat_geometry.length,
-                                            1.4 * length + std::max(.07, 2 * cell)) +
-                                  2 * std::hypot(dx, dz);
-    const Camera3D views[]{
-        {{13.3f, 21.76f, 17.49f}, {0, 0, 0}, {0, 1, 0}, 42, CAMERA_PERSPECTIVE},
-        {{target.x + 4, 5, target.z + 6}, target, {0, 1, 0}, 42, CAMERA_PERSPECTIVE}};
-    std::filesystem::create_directories("boat-captures");
-    float elapsed = 0;
-    for (int frame = 0; frame < 5; ++frame) {
-        while (elapsed < frame * .2f) {
-            simulation.step(dt, config.damping);
-            elapsed += dt;
-        }
-        const auto state = water::download(simulation);
-        for (int view = 0; view < 2; ++view) {
-            std::vector<Color> disturbed;
-            int outside_changed = 0;
-            for (int flat = 0; flat < 2; ++flat) {
-                auto surface = state;
-                if (flat)
-                    for (auto* values : {&surface.eta, &surface.u, &surface.v})
-                        std::fill(values->begin(), values->end(), 0);
-                water::upload(simulation, surface);
-                renderer.update(simulation);
-                boat.update(simulation);
-                BeginDrawing();
-                scene.draw(views[view], renderer, boat, {}, 3, config.reflection);
-                const auto image = LoadImageFromScreen();
-                CHECK(image.data);
-                const auto colors = LoadImageColors(image);
-                CHECK(colors);
-                if (!flat) {
-                    disturbed.assign(colors, colors + image.width * image.height);
-                } else {
-                    for (int y = 0; y < image.height; ++y) {
-                        for (int x = 0; x < image.width; ++x) {
-                            const auto a = disturbed[y * image.width + x], b = colors[y * image.width + x];
-                            const int delta = std::abs(int(a.r) - b.r) + std::abs(int(a.g) - b.g) +
-                                              std::abs(int(a.b) - b.b);
-                            const Ray ray = GetScreenToWorldRay({float(x), float(y)}, views[view]);
-                            const float t = -ray.position.y / ray.direction.y;
-                            const float wx = ray.position.x + t * ray.direction.x;
-                            const float wz = ray.position.z + t * ray.direction.z;
-                            const double radius = std::hypot(wx - target.x, wz - target.z);
-                            // This world-space exclusion contains the complete pressure footprint.
-                            if (t > 0 && radius > support_radius && std::abs(wx) < 10 && std::abs(wz) < 6)
-                                outside_changed += delta > 3;
-                        }
-                    }
-                }
-                const bool saved = ExportImage(image, TextFormat("boat-captures/released-%d-%d-%d.png", frame, view, flat));
-                UnloadImageColors(colors);
-                UnloadImage(image);
-                EndDrawing();
-                CHECK(saved);
-            }
-            std::cout << "RELEASE RENDER time=" << elapsed << " view=" << view
-                      << " outside changed pixels=" << outside_changed << '\n';
-            // Baseline overview had only 59 / 0 / 0 pixels at .4 / .6 / .8 seconds.
-            if (view == 0 && frame == 2) CHECK(outside_changed >= 300);
-            if (view == 0 && frame >= 3) CHECK(outside_changed >= 100);
-            if (view == 1 && frame >= 2) CHECK(outside_changed >= 5000);
-        }
-        water::upload(simulation, state);
-    }
-    CHECK(glGetError() == GL_NO_ERROR);
+    CHECK(visible);
 }
