@@ -305,3 +305,85 @@ TEST_CASE("wake_physics", emitted_history_moves_in_world_coordinates) {
         }
     }
 }
+
+TEST_CASE("wake_reverse", released_history_survives_actual_reversal) {
+    std::filesystem::create_directories("wake-physics");
+    std::ofstream csv("wake-physics/reversal.csv");
+    csv.exceptions(std::ios::badbit | std::ios::failbit);
+    csv << "time,x,z,yaw,vx,vz,longitudinal_speed,min_support_clearance,old_rms,incoming_rms,"
+           "reference_error_rms,change_rms,frozen_error_rms,rigid_error_rms\n";
+    water::Config c;
+    c.grid = {96, 64, 12, 8};
+    c.impact_radius = .3f;
+    c.rain_rate = 0;
+    constexpr float dt = .01f;
+    water::Simulation simulation(c), incoming(c);
+    water::upload_boat(simulation, {3, 4, 0, 1.5f, 0, 0});
+    for (int step = 0; step < 400; ++step) {
+        water::upload_boat(simulation, {3 + 1.5f * step * dt, 4, 0, 1.5f, 0, 0});
+        simulation.step(dt, 0);
+    }
+    const auto initial = water::download(simulation);
+    const auto released = water::download_boat(simulation);
+    auto reference_state = initial;
+    double clearance = 100;
+    int negative_samples = 0;
+    for (int step = 0; step < 240; ++step) {
+        const auto before = water::download_boat(simulation);
+        // Identical boat inputs isolate the linear response to later pressure forcing.
+        water::upload_boat(incoming, before);
+        simulation.step(dt, 0, {-1, 0});
+        incoming.step(dt, 0, {-1, 0});
+        reference_state = reference::step(c, reference_state, dt, 0);
+        const auto boat = water::download_boat(simulation);
+        // .5 m encloses the rotated pressure ellipse plus its face-gradient halo.
+        // The complete future support union is checked at every substep against the fixed window.
+        clearance = std::min(clearance, std::min(double(before.x), double(boat.x)) - .5 - 7.375);
+        CHECK(clearance > 0);
+        if ((step + 1) % 20)
+            continue;
+        const auto state = water::download(simulation);
+        const auto forcing = water::download(incoming);
+        auto old = state;
+        for (size_t i = 0; i < old.eta.size(); ++i)
+            old.eta[i] -= forcing.eta[i];
+        const double longitudinal = boat.vx * std::cos(boat.yaw) + boat.vz * std::sin(boat.yaw);
+        double energy = 0, contamination = 0, error = 0, change = 0, frozen = 0, rigid = 0;
+        int count = 0;
+        for (int z = 28; z < 39; ++z)
+            for (int x = 40; x < 59; ++x) {
+                const int i = z * c.grid.nx + x;
+                energy += double(old.eta[i]) * old.eta[i];
+                contamination += double(forcing.eta[i]) * forcing.eta[i];
+                error += std::pow(double(old.eta[i]) - reference_state.eta[i], 2);
+                change += std::pow(double(old.eta[i]) - initial.eta[i], 2);
+                frozen += std::pow(double(reference_state.eta[i]) - initial.eta[i], 2);
+                const double rx = (x + .5) * c.grid.lx / c.grid.nx - boat.x + released.x;
+                const double rz = (z + .5) * c.grid.lz / c.grid.ny - boat.z + released.z;
+                rigid += std::pow(double(old.eta[i]) - sample(reference_state, c.grid, rx, rz), 2);
+                ++count;
+            }
+        csv << (step + 1) * dt << ',' << boat.x << ',' << boat.z << ',' << boat.yaw << ','
+            << boat.vx << ',' << boat.vz << ',' << longitudinal << ',' << clearance << ','
+            << std::sqrt(energy / count) << ',' << std::sqrt(contamination / count) << ','
+            << std::sqrt(error / count) << ',' << std::sqrt(change / count) << ','
+            << std::sqrt(frozen / count) << ',' << std::sqrt(rigid / count) << '\n';
+        std::cout << "REVERSAL t=" << (step + 1) * dt << " longitudinal=" << longitudinal
+                  << " old_rms=" << std::sqrt(energy / count)
+                  << " incoming_relative=" << std::sqrt(contamination / energy)
+                  << " reference_relative=" << std::sqrt(error / energy)
+                  << " frozen_relative=" << std::sqrt(frozen / energy)
+                  << " rigid_relative=" << std::sqrt(rigid / energy) << std::endl;
+        if (longitudinal >= -.1)
+            continue;
+        ++negative_samples;
+        CHECK(energy / count > 1e-12);
+        CHECK(change / energy > .01);
+        CHECK(std::sqrt(error / energy) < .0001);
+        CHECK(frozen > 100 * error);
+        CHECK(frozen / energy > .01);
+        CHECK(rigid > 100 * error);
+        CHECK(rigid / energy > .01);
+    }
+    CHECK(negative_samples >= 3);
+}
