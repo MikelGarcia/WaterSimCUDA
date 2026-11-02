@@ -1,4 +1,4 @@
-# CUDA 13.4.3 x64 ordinary cuFFT runtime; verified imports/startup are documented in docs/build-environment.md.
+# CUDA 13.4.3 x64 ordinary cuFFT runtime.
 set(WATER_CUDA_RUNTIME_DLLS "${CUDAToolkit_BIN_DIR}/x64/cufft64_12.dll")
 foreach(dll IN LISTS WATER_CUDA_RUNTIME_DLLS)
     if(NOT EXISTS "${dll}")

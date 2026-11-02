@@ -2,7 +2,7 @@
 
 A Windows C++17/CUDA shallow-water basin with a GPU driven 0.60 m RC boat, rendered with raylib and OpenGL 3.3. Forward speed is capped at 1.875 m/s and reverse at 0.9375 m/s. CUDA owns the water state and writes the shared mesh buffers. Falling drops trigger volume-balanced ripples; the simulation uses fixed stable substeps and a bounded catch-up clock.
 
-Build with a supported MSVC/CUDA pair, CMake, an NVIDIA GPU, and a desktop session. See [the checked build environment](docs/build-environment.md) for exact versions, environment setup, and the pinned raylib offline override.
+Build with a supported MSVC/CUDA pair, CMake, an NVIDIA GPU, and a desktop session.
 
 ```bat
 cmake -S . -B build-desktop -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
@@ -46,6 +46,6 @@ $env:WATER_VALIDATE_CAPTURE = "$PWD/build-desktop/water.png"
 Remove-Item Env:WATER_VALIDATE_SECONDS, Env:WATER_VALIDATE_WARMUP, Env:WATER_VALIDATE_CAPTURE
 ```
 
-These runs retain the normal 60 FPS cap. See [validation results and remaining manual checks](docs/validation.md).
+These runs retain the normal 60 FPS cap.
 
 `ctest --test-dir build-desktop -C Release -L soak --output-on-failure` runs 120 simulated seconds of maximum seeded rain on each rectangular test grid. It uses the production controller and CUDA solver without opening a window, checking finite state, mean height, amplitude and the final 30-second envelope. The soak requires `WATER_BUILD_DEMO=ON` for raylib's scheduler types; `WATER_BUILD_DEMO=OFF` retains the raylib-free configuration, numerical, impact and timing groups.
