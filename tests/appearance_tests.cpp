@@ -1291,7 +1291,7 @@ TEST_CASE("wake_visual", time_ordered_maneuver_artifacts) {
             }
             const double incoming_fraction = old_energy > 0 ? std::sqrt(incoming_energy/old_energy) : 0;
             auto flat = state;
-            for (auto* field : {&flat.eta,&flat.u,&flat.v}) std::fill(field->begin(),field->end(),0);
+            for (auto* field : {&flat.eta,&flat.u,&flat.v}) std::fill(field->begin(),field->end(),0.0f);
             boat.update(simulation);
             for (int view = 0; view < 2; ++view) {
                 std::array<std::vector<Color>,3> images;
