@@ -1230,9 +1230,9 @@ TEST_CASE("wake_visual", time_ordered_maneuver_artifacts) {
         bool saw_stop = false, saw_turn = false;
         const double dx = double(config.grid.lx)/config.grid.nx;
         const double dz = double(config.grid.lz)/config.grid.ny;
-        // Encloses shifted compact pressure and the centered-gradient halo.
+        // Encloses compact pressure about its emitter and the centered-gradient halo.
         const double support = std::hypot(std::max(.3,2*dx),std::max(.5*water::boat_geometry.beam,1.5*dx))
-                             + .4*water::boat_geometry.length + 2*std::hypot(dx,dz);
+                             + 2*std::hypot(dx,dz);
         for (int frame = 0; frame <= 120; ++frame) {
             for (int tick = 0; frame > 0 && tick < 12; ++tick) {
                 const double time = app.sim_time();
@@ -1247,9 +1247,13 @@ TEST_CASE("wake_visual", time_ordered_maneuver_artifacts) {
                 for (int region = 0; region < 2; ++region) if (frame*12+tick >= (region == 0 ? 40 : 90)*12+11) {
                     const auto next = water::download_boat(simulation);
                     const auto& bounds = regions[region];
-                    const double x = std::clamp(double(next.x),bounds[0],bounds[1]);
-                    const double z = std::clamp(double(next.z),bounds[2],bounds[3]);
-                    clearance[region] = std::min(clearance[region],std::hypot(next.x-x,next.z-z)-support);
+                    const double c = std::cos(next.yaw), s = std::sin(next.yaw);
+                    const double speed = std::hypot(next.vx,next.vz);
+                    const double offset = speed > 0 ? .4*water::boat_geometry.length*(next.vx*c+next.vz*s)/speed : 0;
+                    const double emitter_x = next.x+offset*c, emitter_z = next.z+offset*s;
+                    const double x = std::clamp(emitter_x,bounds[0],bounds[1]);
+                    const double z = std::clamp(emitter_z,bounds[2],bounds[3]);
+                    clearance[region] = std::min(clearance[region],std::hypot(emitter_x-x,emitter_z-z)-support);
                 }
             }
             const double time = app.sim_time();
