@@ -20,8 +20,8 @@ private:
 
 struct SpawnView { Camera3D camera; float aspect; };
 
-inline constexpr float drop_radius = 0.0065f, drop_height = 0.028f, drop_spawn_margin = 0.12f;
-inline constexpr double drop_acceleration = 981.0;
+inline constexpr float drop_radius = 0.065f, drop_height = 0.28f, drop_spawn_margin = 0.12f;
+inline constexpr double drop_acceleration = 245.25;
 
 struct Drop {
     float x, z;
