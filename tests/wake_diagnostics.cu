@@ -24,6 +24,12 @@ double sample(const water::Snapshot &state, const water::Grid &g, double x, doub
 std::array<double, 3> spectra(const water::Snapshot &state, const water::Grid &g, water::BoatState boat,
                               std::ofstream &csv, std::ofstream &radial_csv, const char *dataset, float speed,
                               double time) {
+    const double c = std::cos(boat.yaw), s = std::sin(boat.yaw);
+    const double velocity = std::hypot(boat.vx, boat.vz);
+    // Keep shell radii relative to the pressure emitter at hull positions 9/1.
+    const double offset = velocity > 0 ? .4 * water::boat_geometry.length *
+        (boat.vx * c + boat.vz * s) / velocity : 0;
+    const double origin_x = boat.x + offset * c, origin_z = boat.z + offset * s;
     std::array<double, 3> peaks{};
     for (int shell = 0; shell < 3; ++shell) {
         double maximum = -1;
@@ -35,8 +41,8 @@ std::array<double, 3> spectra(const water::Snapshot &state, const water::Grid &g
                 const double r = 1.2 + .6 * shell + .6 * (radial + .5) / 80;
                 double heights[2]{};
                 for (int side = 0; side < 2; ++side) {
-                    const double height = sample(state, g, boat.x - r * std::cos(a),
-                                                 boat.z + (side ? 1 : -1) * r * std::sin(a));
+                    const double height = sample(state, g, origin_x - r * std::cos(a),
+                                                 origin_z + (side ? 1 : -1) * r * std::sin(a));
                     square[side] += height * height / 80;
                     heights[side] = height;
                 }
