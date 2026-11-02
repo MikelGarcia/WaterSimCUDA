@@ -1216,7 +1216,7 @@ TEST_CASE("wake_visual", time_ordered_maneuver_artifacts) {
         water::BoatRenderer boat(config.grid);
         water::SceneRenderer scene(config);
         CHECK(scene.resize(840,560));
-        water::upload_boat(simulation,{4-.4f*water::boat_geometry.length,6,0,0,0,0});
+        water::upload_boat(simulation,{4-.3f*water::boat_geometry.length,6,0,0,0,0});
         const water::SpawnView spawn_view{views[0],1.5f};
         std::ofstream manifest(directory / "frames.csv");
         std::ofstream probes(directory / "water.csv");
@@ -1249,7 +1249,7 @@ TEST_CASE("wake_visual", time_ordered_maneuver_artifacts) {
                     const auto& bounds = regions[region];
                     const double c = std::cos(next.yaw), s = std::sin(next.yaw);
                     const double speed = std::hypot(next.vx,next.vz);
-                    const double offset = speed > 0 ? .4*water::boat_geometry.length*(next.vx*c+next.vz*s)/speed : 0;
+                    const double offset = speed > 0 ? .3*water::boat_geometry.length*(next.vx*c+next.vz*s)/speed : 0;
                     const double emitter_x = next.x+offset*c, emitter_z = next.z+offset*s;
                     const double x = std::clamp(emitter_x,bounds[0],bounds[1]);
                     const double z = std::clamp(emitter_z,bounds[2],bounds[3]);

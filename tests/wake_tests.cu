@@ -18,7 +18,7 @@ double head(double x, double z, const water::BoatState &b, const water::Config &
     const double a = std::max(.5 * water::boat_geometry.length, 2 * cell);
     const double d = std::max(.5 * water::boat_geometry.beam, 1.5 * cell);
     const double velocity = std::hypot(double(b.vx), double(b.vz));
-    const double offset = velocity > 0 ? .4 * water::boat_geometry.length *
+    const double offset = velocity > 0 ? .3 * water::boat_geometry.length *
         (b.vx * std::cos(b.yaw) + b.vz * std::sin(b.yaw)) / velocity : 0;
     const double l = (x - b.x) * std::cos(b.yaw) + (z - b.z) * std::sin(b.yaw) - offset;
     const double t = -(x - b.x) * std::sin(b.yaw) + (z - b.z) * std::cos(b.yaw);
@@ -89,7 +89,7 @@ TEST_CASE("wake", pressure_origin_follows_motion_at_bow_and_stern) {
                 const double transverse = (-moment_x * std::sin(yaw) + moment_z * std::cos(yaw)) / mass;
                 std::cout << "ORIGIN yaw=" << yaw << " direction=" << direction
                           << " throttle=" << throttle << " longitudinal=" << longitudinal << '\n';
-                CHECK_NEAR(longitudinal, direction * .24, .002);
+                CHECK_NEAR(longitudinal, direction * .18, .002);
                 CHECK_NEAR(transverse, 0, .002);
             }
 }
@@ -394,7 +394,7 @@ TEST_CASE("wake", pressure_support_is_compact_and_rotation_covariant) {
                 const int i = z * c.grid.nx + x;
                 p[i] = p[i - 1] - cell * state.u[z * (c.grid.nx + 1) + x] / (c.gravity * dt);
                 const double px = (x + .5) * cell - b.x, pz = (z + .5) * cell - b.z;
-                const double l = px * std::cos(yaw) + pz * std::sin(yaw) - .4 * water::boat_geometry.length,
+                const double l = px * std::cos(yaw) + pz * std::sin(yaw) - .3 * water::boat_geometry.length,
                              t = -px * std::sin(yaw) + pz * std::cos(yaw);
                 peak = std::max(peak, std::abs(p[i]));
                 if (l * l / (a * a) + t * t / (d * d) > 1.0001)

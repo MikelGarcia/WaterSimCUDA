@@ -26,8 +26,8 @@ std::array<double, 3> spectra(const water::Snapshot &state, const water::Grid &g
                               double time) {
     const double c = std::cos(boat.yaw), s = std::sin(boat.yaw);
     const double velocity = std::hypot(boat.vx, boat.vz);
-    // Keep shell radii relative to the pressure emitter at hull positions 9/1.
-    const double offset = velocity > 0 ? .4 * water::boat_geometry.length *
+    // Keep shell radii relative to the pressure emitter at hull positions 8/2.
+    const double offset = velocity > 0 ? .3 * water::boat_geometry.length *
         (boat.vx * c + boat.vz * s) / velocity : 0;
     const double origin_x = boat.x + offset * c, origin_z = boat.z + offset * s;
     std::array<double, 3> peaks{};
@@ -342,10 +342,10 @@ TEST_CASE("wake_reverse", released_history_survives_actual_reversal) {
         incoming.step(dt, 0, {-1, 0});
         reference_state = reference::step(c, reference_state, dt, 0);
         const auto boat = water::download_boat(simulation);
-        // .74 m encloses the shifted pressure ellipse plus its face-gradient halo.
+        // .68 m encloses the shifted pressure ellipse plus its face-gradient halo.
         // The complete future support union is checked at every substep against the fixed window.
         clearance = std::min(clearance, std::min(double(before.x), double(boat.x)) -
-                             (.5 + .4 * water::boat_geometry.length) - 7.375);
+                             (.5 + .3 * water::boat_geometry.length) - 7.375);
         CHECK(clearance > 0);
         if ((step + 1) % 20)
             continue;
