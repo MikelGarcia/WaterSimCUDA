@@ -1230,9 +1230,9 @@ TEST_CASE("wake_visual", time_ordered_maneuver_artifacts) {
         bool saw_stop = false, saw_turn = false;
         const double dx = double(config.grid.lx)/config.grid.nx;
         const double dz = double(config.grid.lz)/config.grid.ny;
-        // Encloses rotated compact pressure and the centered-gradient halo.
+        // Encloses shifted compact pressure and the centered-gradient halo.
         const double support = std::hypot(std::max(.3,2*dx),std::max(.5*water::boat_geometry.beam,1.5*dx))
-                             + 2*std::hypot(dx,dz);
+                             + .4*water::boat_geometry.length + 2*std::hypot(dx,dz);
         for (int frame = 0; frame <= 120; ++frame) {
             for (int tick = 0; frame > 0 && tick < 12; ++tick) {
                 const double time = app.sim_time();

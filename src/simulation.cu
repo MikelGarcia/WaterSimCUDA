@@ -206,7 +206,9 @@ __global__ void apply_impact_batch(float* eta, ImpactBatch batch, const double2*
 __device__ float hull_head(float x, float z, const BoatState& b,
                            float dx, float dz, float depth) {
     const float c = cosf(b.yaw), s = sinf(b.yaw);
-    const float longitudinal = (x - b.x) * c + (z - b.z) * s;
+    const float speed = hypotf(b.vx, b.vz);
+    const float offset = speed > 0 ? .4f * boat_geometry.length * (b.vx * c + b.vz * s) / speed : 0;
+    const float longitudinal = (x - b.x) * c + (z - b.z) * s - offset;
     const float transverse = -(x - b.x) * s + (z - b.z) * c;
     const float cell = fmaxf(dx, dz);
     const float a = fmaxf(.5f * boat_geometry.length, 2 * cell);

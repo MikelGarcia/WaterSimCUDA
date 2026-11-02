@@ -336,9 +336,10 @@ TEST_CASE("wake_reverse", released_history_survives_actual_reversal) {
         incoming.step(dt, 0, {-1, 0});
         reference_state = reference::step(c, reference_state, dt, 0);
         const auto boat = water::download_boat(simulation);
-        // .5 m encloses the rotated pressure ellipse plus its face-gradient halo.
+        // .74 m encloses the shifted pressure ellipse plus its face-gradient halo.
         // The complete future support union is checked at every substep against the fixed window.
-        clearance = std::min(clearance, std::min(double(before.x), double(boat.x)) - .5 - 7.375);
+        clearance = std::min(clearance, std::min(double(before.x), double(boat.x)) -
+                             (.5 + .4 * water::boat_geometry.length) - 7.375);
         CHECK(clearance > 0);
         if ((step + 1) % 20)
             continue;

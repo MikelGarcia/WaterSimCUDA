@@ -17,7 +17,10 @@ double head(double x, double z, const water::BoatState &b, const water::Config &
     const double cell = std::max(double(c.grid.lx) / c.grid.nx, double(c.grid.lz) / c.grid.ny);
     const double a = std::max(.5 * water::boat_geometry.length, 2 * cell);
     const double d = std::max(.5 * water::boat_geometry.beam, 1.5 * cell);
-    const double l = (x - b.x) * std::cos(b.yaw) + (z - b.z) * std::sin(b.yaw);
+    const double velocity = std::hypot(double(b.vx), double(b.vz));
+    const double offset = velocity > 0 ? .4 * water::boat_geometry.length *
+        (b.vx * std::cos(b.yaw) + b.vz * std::sin(b.yaw)) / velocity : 0;
+    const double l = (x - b.x) * std::cos(b.yaw) + (z - b.z) * std::sin(b.yaw) - offset;
     const double t = -(x - b.x) * std::sin(b.yaw) + (z - b.z) * std::cos(b.yaw);
     const double rho = l * l / (a * a) + t * t / (d * d);
     const double speed = (double(b.vx) * b.vx + double(b.vz) * b.vz) / (1.875 * 1.875);
@@ -56,6 +59,41 @@ double intensity(const water::Snapshot& s) {
     return sum;
 }
 } // namespace
+TEST_CASE("wake", pressure_origin_follows_motion_at_bow_and_stern) {
+    auto c = fixture();
+    c.grid = {192, 192, 6, 6};
+    water::Simulation simulation(c);
+    constexpr float dt = 1e-5f;
+    const double cell = double(c.grid.lx) / c.grid.nx;
+    for (float yaw : {0.f, .7f, 1.57079632679f, 2.8f})
+        for (float direction : {-1.f, 1.f})
+            for (float throttle : {-1.f, 1.f}) {
+                simulation.reset();
+                water::upload_boat(simulation, {3, 3, yaw, direction * std::cos(yaw),
+                                                direction * std::sin(yaw), 0});
+                simulation.step(dt, 0, {throttle, 0});
+                const auto boat = water::download_boat(simulation);
+                const auto state = water::download(simulation);
+                double mass = 0, moment_x = 0, moment_z = 0;
+                for (int z = 0; z < c.grid.ny; ++z) {
+                    double pressure = 0;
+                    for (int x = 1; x < c.grid.nx; ++x) {
+                        pressure -= cell * state.u[z * (c.grid.nx + 1) + x] / (c.gravity * dt);
+                        mass += pressure;
+                        moment_x += pressure * ((x + .5) * cell - boat.x);
+                        moment_z += pressure * ((z + .5) * cell - boat.z);
+                    }
+                }
+                CHECK(mass > 0);
+                const double longitudinal = (moment_x * std::cos(yaw) + moment_z * std::sin(yaw)) / mass;
+                const double transverse = (-moment_x * std::sin(yaw) + moment_z * std::cos(yaw)) / mass;
+                std::cout << "ORIGIN yaw=" << yaw << " direction=" << direction
+                          << " throttle=" << throttle << " longitudinal=" << longitudinal << '\n';
+                CHECK_NEAR(longitudinal, direction * .24, .002);
+                CHECK_NEAR(transverse, 0, .002);
+            }
+}
+
 TEST_CASE("wake", independent_pressure_gradient_and_continuity) {
     for (bool transpose : {false, true}) {
         auto c = fixture();
@@ -356,7 +394,7 @@ TEST_CASE("wake", pressure_support_is_compact_and_rotation_covariant) {
                 const int i = z * c.grid.nx + x;
                 p[i] = p[i - 1] - cell * state.u[z * (c.grid.nx + 1) + x] / (c.gravity * dt);
                 const double px = (x + .5) * cell - b.x, pz = (z + .5) * cell - b.z;
-                const double l = px * std::cos(yaw) + pz * std::sin(yaw),
+                const double l = px * std::cos(yaw) + pz * std::sin(yaw) - .4 * water::boat_geometry.length,
                              t = -px * std::sin(yaw) + pz * std::cos(yaw);
                 peak = std::max(peak, std::abs(p[i]));
                 if (l * l / (a * a) + t * t / (d * d) > 1.0001)
