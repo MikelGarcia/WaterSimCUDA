@@ -1216,7 +1216,7 @@ TEST_CASE("wake_visual", time_ordered_maneuver_artifacts) {
         water::BoatRenderer boat(config.grid);
         water::SceneRenderer scene(config);
         CHECK(scene.resize(840,560));
-        water::upload_boat(simulation,{4,6,0,0,0,0});
+        water::upload_boat(simulation,{4-.4f*water::boat_geometry.length,6,0,0,0,0});
         const water::SpawnView spawn_view{views[0],1.5f};
         std::ofstream manifest(directory / "frames.csv");
         std::ofstream probes(directory / "water.csv");
